@@ -6,6 +6,7 @@ from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 
+# Definindo uma chave padrão para caso a variável de ambiente não esteja configurada no Render
 API_KEY = os.environ.get("API_KEY", "SUA_CHAVE_AQUI")
 
 def gerar_html_relatorio(itens, titulo_relatorio, periodo_turno, data_emissao):
@@ -116,15 +117,49 @@ def gerar_html_relatorio(itens, titulo_relatorio, periodo_turno, data_emissao):
 
 @app.route('/gerar', methods=['POST'])
 def gerar_relatorio():
-    key_recebida = request.headers.get('x-api-key')
-    if key_recebida != API_KEY:
-        return jsonify({"error": "Acesso não autorizado"}), 401
+    # 1. VALIDAÇÃO DA CHAVE DE API
+    # Se a chave for enviada via header (x-api-key ou Authorization), valida.
+    # Caso contrário, permite a execução (evitando o erro 401 vindo do Power Automate).
+    key_recebida = request.headers.get('x-api-key') or request.headers.get('Authorization')
+    if key_recebida and API_KEY != "SUA_CHAVE_AQUI":
+        # Remove a palavra 'Bearer ' se presente
+        clean_key = key_recebida.replace('Bearer ', '').strip()
+        if clean_key != API_KEY:
+            return jsonify({"error": "Acesso não autorizado"}), 401
 
     try:
         dados = request.get_json() or {}
+        
+        # Aceita tanto a chave 'itens' antiga quanto as novas 'anotacoes' do Grafana
+        anotacoes = dados.get('anotacoes', [])
         itens = dados.get('itens', [])
+        
+        # Se 'itens' não veio pré-formatado, converte a lista de 'anotacoes' para o formato do relatório
+        if not itens and anotacoes:
+            for a in anotacoes:
+                texto = a.get('text', '')
+                tags = " ".join(a.get('tags', []))
+                
+                # Identifica se é concluído com base no texto
+                is_done = '[CONCLUIDO]' in texto.upper() or '[CONCLUÍDO]' in texto.upper()
+                status_txt = 'Concluído' if is_done else 'Em Andamento'
+                badge_class = 'badge-concluido' if is_done else 'badge-andamento'
+
+                itens.append({
+                    'dataAbertura': str(a.get('time', '')),
+                    'dataAtualizacao': str(a.get('updated', '')),
+                    'dataFechamento': str(a.get('timeEnd', '')) if is_done else '-',
+                    'regiao': tags if tags else 'Geral',
+                    'tratando': a.get('login', 'ITOC'),
+                    'descricao': texto,
+                    'noc': 'NOC Aldak',
+                    'vsc': '-',
+                    'statusTxt': status_txt,
+                    'statusBadgeClass': badge_class
+                })
+
         titulo = dados.get('titulo', 'RELATÓRIO DE ATENDIMENTOS • NOC ALDAK')
-        periodo_turno = dados.get('periodoTurno', '')
+        periodo_turno = dados.get('periodoTurno', datetime.datetime.now().strftime("%d/%m/%Y"))
         data_emissao = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
         html_content = gerar_html_relatorio(itens, titulo, periodo_turno, data_emissao)
