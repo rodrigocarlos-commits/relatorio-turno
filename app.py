@@ -127,7 +127,10 @@ def gerar_relatorio():
         dados = request.get_json() or {}
         anotacoes = dados.get('anotacoes', [])
         
-        itens = []
+        itens_norte = []
+        itens_sul_sudeste = []
+        itens_geral = []
+
         for a in anotacoes:
             texto = a.get('text', '')
             tags = a.get('tags', [])
@@ -138,7 +141,9 @@ def gerar_relatorio():
             status_txt = 'Intermitente' if is_intermitente else ('Concluído' if is_done else 'Em Andamento')
             badge_class = 'badge-intermitente' if is_intermitente else ('badge-concluido' if is_done else 'badge-andamento')
 
-            itens.append({
+            regiao = extrair_regiao(texto, tags)
+
+            item = {
                 'dataAbertura': datetime.datetime.fromtimestamp(a.get('time', 0)/1000).strftime("%d/%m/%Y %H:%M") if a.get('time') else '',
                 'dataAtualizacao': datetime.datetime.fromtimestamp(a.get('updated', 0)/1000).strftime("%d/%m/%Y %H:%M") if a.get('updated') else '',
                 'dataFechamento': '',
@@ -149,31 +154,51 @@ def gerar_relatorio():
                 'vsc': '',
                 'statusTxt': status_txt,
                 'statusBadgeClass': badge_class
-            })
+            }
+
+            itens_geral.append(item)
+            if regiao == 'NORTE':
+                itens_norte.append(item)
+            else:
+                itens_sul_sudeste.append(item)
 
         agora = datetime.datetime.now()
         data_emissao = agora.strftime("%d/%m/%Y, %H:%M:%S")
+        data_nome = agora.strftime("%d-%m-%Y")
         periodo_turno = f"{agora.strftime('%d/%m/%Y')} (05:00 às 18:00)"
-        timestamp_str = agora.strftime('%Y%m%d_%H%M%S')
-        
-        html_content = gerar_html_relatorio(itens, "RELATÓRIO DE ATENDIMENTOS • CORREDOR NORTE", periodo_turno, data_emissao)
+
+        config_relatorios = [
+            {"sufixo": "Norte", "titulo": "RELATÓRIO DE ATENDIMENTOS • CORREDOR NORTE", "itens": itens_norte},
+            {"sufixo": "SulSudeste", "titulo": "RELATÓRIO DE ATENDIMENTOS • CORREDOR SUL/SUDESTE", "itens": itens_sul_sudeste},
+            {"sufixo": "Geral", "titulo": "RELATÓRIO DE ATENDIMENTOS • GERAL", "itens": itens_geral}
+        ]
+
+        relatorios_gerados = []
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page(viewport={"width": 1200, "height": 800})
-            page.set_content(html_content)
             
-            # Gera os dois ficheiros
-            pdf_bytes = page.pdf(format="A4", landscape=True, print_background=True)
-            image_bytes = page.screenshot(full_page=True)
+            for config in config_relatorios:
+                html_content = gerar_html_relatorio(config["itens"], config["titulo"], periodo_turno, data_emissao)
+                
+                page = browser.new_page(viewport={"width": 1200, "height": 800})
+                page.set_content(html_content)
+                
+                pdf_bytes = page.pdf(format="A4", landscape=True, print_background=True)
+                image_bytes = page.screenshot(full_page=True)
+                page.close()
+
+                relatorios_gerados.append({
+                    "regiao": config["sufixo"],
+                    "filename": f"Relatorio_GMG_{config['sufixo']}_{data_nome}.pdf",
+                    "image_filename": f"Relatorio_GMG_{config['sufixo']}_{data_nome}.png",
+                    "pdf_base64": base64.b64encode(pdf_bytes).decode('utf-8'),
+                    "image_base64": base64.b64encode(image_bytes).decode('utf-8')
+                })
+
             browser.close()
 
-        return jsonify({
-            "filename": f"Relatorio_Corredor_Norte_{timestamp_str}.pdf",
-            "image_filename": f"Relatorio_Corredor_Norte_{timestamp_str}.png",
-            "pdf_base64": base64.b64encode(pdf_bytes).decode('utf-8'),
-            "image_base64": base64.b64encode(image_bytes).decode('utf-8')
-        }), 200
+        return jsonify({"relatorios": relatorios_gerados}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
