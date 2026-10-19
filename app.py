@@ -11,16 +11,19 @@ import playwright.async_api as playwright_async
 
 app = Flask(__name__)
 
-# Configuração de suporte para acentos e símbolos especiais
-def limpar_texto(texto):
+def sanitizar_texto(texto):
+    """Limpa caracteres estranhos, codificações ANSI e símbolos corrompidos."""
     if not texto or pd.isna(texto):
         return ""
     texto = str(texto)
-    # Garante decodificação limpa UTF-8 e escape de entidades HTML
+    # Decodifica entidades HTML se houver
     texto = html.unescape(texto)
-    return texto
+    # Remove códigos de escape ANSI / caracteres de controle invisíveis
+    texto = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', texto)
+    # Substitui sequências corrompidas conhecidas vindas da fonte
+    texto = texto.replace("C sá", "Cls").replace("[]", "").replace("", "")
+    return texto.strip()
 
-# Template HTML com codificação UTF-8 explícita e regras CSS para layout
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -30,7 +33,7 @@ HTML_TEMPLATE = """
     <style>
         @page {
             size: A4 landscape;
-            margin: 12mm 10mm 12mm 10mm;
+            margin: 10mm;
         }
         body {
             font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
@@ -44,20 +47,20 @@ HTML_TEMPLATE = """
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
             border-bottom: 2px solid #E2E8F0;
-            padding-bottom: 8px;
+            padding-bottom: 6px;
         }
         .title {
-            font-size: 18px;
+            font-size: 16px;
             font-weight: bold;
             color: #1A202C;
             text-transform: uppercase;
         }
         .subtitle {
-            font-size: 11px;
+            font-size: 10px;
             color: #718096;
-            margin-top: 3px;
+            margin-top: 2px;
         }
         .badge-gerado {
             background-color: #FEFCBF;
@@ -65,46 +68,42 @@ HTML_TEMPLATE = """
             padding: 4px 8px;
             border-radius: 4px;
             font-weight: bold;
-            font-size: 10px;
+            font-size: 9px;
+            text-align: right;
         }
         .cards-container {
             display: flex;
-            gap: 15px;
-            margin-bottom: 15px;
+            gap: 12px;
+            margin-bottom: 12px;
             background-color: #F7FAFC;
-            padding: 10px;
+            padding: 8px 12px;
             border-radius: 6px;
             border: 1px solid #E2E8F0;
+            align-items: center;
         }
         .card {
-            display: flex;
-            align-items: center;
-            gap: 8px;
             font-weight: bold;
+            font-size: 11px;
         }
         .status-pill {
             padding: 3px 8px;
             border-radius: 12px;
             font-size: 9px;
             font-weight: bold;
-            text-transform: capitalize;
             display: inline-block;
             text-align: center;
         }
         .status-concluido { background-color: #C6F6D5; color: #22543D; }
         .status-andamento { background-color: #FEEBC8; color: #742A2A; }
         .status-intermitente { background-color: #E9D8FD; color: #44337A; }
-        .status-programado { background-color: #BEE3F8; color: #2B6CB0; }
 
         table {
             width: 100%;
             border-collapse: collapse;
             margin-top: 5px;
-            page-break-inside: auto;
         }
         tr {
             page-break-inside: avoid;
-            page-break-after: auto;
         }
         th {
             background-color: #EDF2F7;
@@ -123,11 +122,11 @@ HTML_TEMPLATE = """
             vertical-align: top;
             word-wrap: break-word;
         }
-        .col-data { width: 10%; }
-        .col-regiao { width: 15%; font-weight: 600; }
-        .col-tratando { width: 8%; }
-        .col-desc { width: 45%; }
-        .col-status { width: 10%; text-align: center; }
+        .col-data { width: 11%; }
+        .col-regiao { width: 18%; font-weight: 600; }
+        .col-tratando { width: 10%; }
+        .col-desc { width: 49%; }
+        .col-status { width: 12%; text-align: center; }
     </style>
 </head>
 <body>
@@ -142,10 +141,13 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="cards-container">
-        <div class="card"><span style="font-size: 16px;">{{ total_atendimentos }}</span> atendimentos neste relatório</div>
-        <div class="card"><span class="status-pill status-concluido">{{ qtd_concluidos }} Concluídos</span></div>
-        <div class="card"><span class="status-pill status-andamento">{{ qtd_andamento }} Em Andamento</span></div>
-        <div class="card"><span class="status-pill status-intermitente">{{ qtd_intermitentes }} Intermitentes</span></div>
+        <div class="card"><span style="font-size: 15px; color: #2B6CB0;">{{ total_atendimentos }}</span> atendimentos neste relatório</div>
+        {% if 'GERAL' in regiao_titulo %}
+            <div class="card"><span class="status-pill status-concluido">{{ qtd_concluidos }} Concluídos</span></div>
+        {% else %}
+            <div class="card"><span class="status-pill status-andamento">{{ qtd_andamento }} Em Andamento</span></div>
+            <div class="card"><span class="status-pill status-intermitente">{{ qtd_intermitentes }} Intermitentes</span></div>
+        {% endif %}
     </div>
 
     <table>
@@ -168,9 +170,9 @@ HTML_TEMPLATE = """
                 <td>{{ item.tratando }}</td>
                 <td class="col-desc">{{ item.descricao }}</td>
                 <td class="col-status">
-                    {% if 'concluid' in item.status.lower() %}
+                    {% if item.status_limpo == 'concluido' %}
                         <span class="status-pill status-concluido">Concluído</span>
-                    {% elif 'intermitent' in item.status.lower() %}
+                    {% elif item.status_limpo == 'intermitente' %}
                         <span class="status-pill status-intermitente">Intermitente</span>
                     {% else %}
                         <span class="status-pill status-andamento">Em Andamento</span>
@@ -185,25 +187,18 @@ HTML_TEMPLATE = """
 """
 
 async def render_pdf_and_image(html_content):
-    """Utiliza o Playwright para gerar o PDF e a Imagem PNG a partir do HTML em UTF-8."""
     async with playwright_async.async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page(viewport={"width": 1280, "height": 800})
-        
-        # Define o conteúdo da página garantindo suporte a caracteres UTF-8
         await page.set_content(html_content, wait_until="networkidle")
         
-        # Gerar PDF
         pdf_bytes = await page.pdf(
             format="A4",
             landscape=True,
             print_background=True,
-            margin={"top": "10mm", "right": "10mm", "bottom": "10mm", "left": "10mm"}
+            margin={"top": "8mm", "right": "8mm", "bottom": "8mm", "left": "8mm"}
         )
-        
-        # Gerar Imagem PNG
         image_bytes = await page.screenshot(full_page=True, type="png")
-        
         await browser.close()
         return pdf_bytes, image_bytes
 
@@ -218,11 +213,22 @@ async def processar_dados():
 
         df = pd.DataFrame(dados_brutos)
         
-        # Normalização dos campos
+        # Limpeza global de strings
         for col in df.columns:
-            df[col] = df[col].apply(limpar_texto)
+            df[col] = df[col].apply(sanitizar_texto)
 
-        # Regiões ativas para relatório
+        # Mapeamento estrito de status
+        def mapear_status(st):
+            st_lower = str(st).lower()
+            if "concluid" in st_lower:
+                return "concluido"
+            elif "intermitent" in st_lower:
+                return "intermitente"
+            else:
+                return "andamento"
+
+        df["status_normalizado"] = df["status"].apply(mapear_status)
+
         regioes = ["NORTE", "SUL", "LESTE", "GERAL"]
         relatorios_output = []
 
@@ -231,37 +237,34 @@ async def processar_dados():
         hora_geracao = agora.strftime("%d/%m/%Y, %H:%M:%S")
 
         for reg in regioes:
-            # 1. Filtro por Região e Regras de Status
             if reg == "GERAL":
-                # Relatório GERAL: Somente Concluídos
-                df_reg = df[df["status"].str.lower().str.contains("concluid", na=False)].copy()
+                # GERAL: Apenas os estritamente Concluídos
+                df_reg = df[df["status_normalizado"] == "concluido"].copy()
             else:
-                # Demais relatórios: Em Atendimento / Em Andamento e Intermitentes
-                mask_regiao = df["regiao"].str.upper().str.contains(reg, na=False)
-                mask_status = df["status"].str.lower().str.contains("atendimento|andamento|intermitent", na=False)
-                df_reg = df[mask_regiao & mask_status].copy()
+                # DEMAIS REGIÕES: Apenas Em Andamento ou Intermitentes (EXCLUI Concluídos)
+                # Verifica a região no campo 'regiao' ou na 'descricao'
+                mask_reg = df["regiao"].str.upper().str.contains(reg, na=False) | df["descricao"].str.upper().str.contains(reg, na=False)
+                mask_status = df["status_normalizado"].isin(["andamento", "intermitente"])
+                df_reg = df[mask_reg & mask_status].copy()
 
             if df_reg.empty:
                 continue
 
-            # Contadores para os Cards superiores
-            qtd_concluidos = len(df_reg[df_reg["status"].str.lower().str.contains("concluid", na=False)])
-            qtd_andamento = len(df_reg[df_reg["status"].str.lower().str.contains("atendimento|andamento", na=False)])
-            qtd_intermitentes = len(df_reg[df_reg["status"].str.lower().str.contains("intermitent", na=False)])
+            qtd_concluidos = len(df_reg[df_reg["status_normalizado"] == "concluido"])
+            qtd_andamento = len(df_reg[df_reg["status_normalizado"] == "andamento"])
+            qtd_intermitentes = len(df_reg[df_reg["status_normalizado"] == "intermitente"])
 
-            # Montagem da lista de itens
             lista_itens = []
             for _, row in df_reg.iterrows():
                 lista_itens.append({
                     "data_abertura": row.get("data_abertura", ""),
                     "atualizacao": row.get("atualizacao", ""),
-                    "regiao_site": f"{row.get('regiao', '')} - {row.get('site', '')}",
+                    "regiao_site": f"{row.get('regiao', '')} - {row.get('site', '')}".strip(" -"),
                     "tratando": row.get("tratando", "ITOC"),
                     "descricao": row.get("descricao", ""),
-                    "status": row.get("status", "")
+                    "status_limpo": row.get("status_normalizado", "andamento")
                 })
 
-            # Renderização do Jinja2
             template = Template(HTML_TEMPLATE)
             html_final = template.render(
                 regiao_titulo=f"CORREDOR {reg}" if reg != "GERAL" else "GERAL",
@@ -274,10 +277,8 @@ async def processar_dados():
                 itens=lista_itens
             )
 
-            # Geração do PDF e Imagem
             pdf_bytes, img_bytes = await render_pdf_and_image(html_final)
 
-            # Codificação Base64
             pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
             img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
