@@ -11,14 +11,39 @@ import playwright.async_api as playwright_async
 
 app = Flask(__name__)
 
+# --- LISTA DE REGIÕES OFICIAIS PARA ISOLAR O NOME LIMPO ---
+REGIOES_CONHECIDAS = [
+    'CARAJAS', 'SALOBO', 'S11D', 'SLZ', 'SÃO LUIZ', 'SAO LUIZ', 
+    'SOSSEGO', 'MOP', 'ONÇA PUMA', 'ONCA PUMA', 'MG', 'VIX', 'ES', 'RJ', 'VALE RJ'
+]
+
+# --- REGRA DE NEGÓCIO: ISOLAR APENAS O NOME DA REGIÃO ---
+def extrair_regiao_limpa(regiao_raw):
+    if not regiao_raw or pd.isna(regiao_raw):
+        return "Geral"
+    
+    texto = str(regiao_raw)
+    # Procura por qualquer uma das regiões conhecidas dentro do texto/tags
+    for reg in REGIOES_CONHECIDAS:
+        if re.search(r'\b' + re.escape(reg) + r'\b', texto, re.IGNORECASE):
+            return reg.upper()
+    
+    # Se não encontrar nenhuma conhecida, limpa tags do Grafana (aldak-tratando, alerta:xxx)
+    partes = texto.split(',')
+    partes_limpas = [p.strip() for p in partes if not p.strip().startswith('aldak-') and not p.strip().startswith('alerta:')]
+    if partes_limpas:
+        return partes_limpas[0].upper()
+    
+    return "GERAL"
+
 # --- REGRA DE NEGÓCIO: DEFINIÇÃO DE CORREDOR ---
-def obter_corredor(regiao):
-    r = str(regiao or '').upper().strip()
+def obter_corredor(regiao_limpa):
+    r = str(regiao_limpa or '').upper().strip()
     if any(k in r for k in ['MG', 'VIX', 'ES', 'RJ', 'VALE RJ', 'SUDESTE', 'SUL']):
         return 'Corredor Sul e Sudeste'
     return 'Corredor Norte'
 
-# --- REGRA DE NEGÓCIO: INTERVALO DE TURNO (05:00-18:00 / 17:00-06:00) ---
+# --- REGRA DE NEGÓCIO: INTERVALO DE TURNO ---
 def obter_intervalo_turno():
     agora = datetime.datetime.now()
     hora_atual = agora.hour
@@ -42,24 +67,21 @@ def obter_intervalo_turno():
         "data_str": inicio_turno.strftime("%d/%m/%Y")
     }
 
-# --- REGRA DE NEGÓCIO: EXTRAÇÃO DE TRATANDO, DESCRIÇÃO E NOC DO TEXTO ---
+# --- REGRA DE NEGÓCIO: EXTRAÇÃO DE TRATANDO, DESCRIÇÃO E NOC ---
 def extrair_dados_texto(texto):
     texto = str(texto or '')
     tratando = ""
     descricao = texto
     noc = ""
 
-    # Extrai quem está tratando
     match_tratando = re.search(r'(?:\[INTERMITENTE\]\s*)?^(.*?)\s+está tratando', texto, re.IGNORECASE)
     if match_tratando:
         tratando = match_tratando.group(1).strip()
 
-    # Extrai descrição entre aspas
     match_desc = re.search(r'"([^"]+)"', texto)
     if match_desc:
         descricao = match_desc.group(1).strip()
 
-    # Extrai o chamado NOC
     match_noc = re.search(r'\(chamado nº\s*([^)]+)\)', texto, re.IGNORECASE)
     if match_noc:
         noc = match_noc.group(1).strip()
@@ -76,7 +98,7 @@ def sanitizar_texto(texto):
     texto = texto.replace("C sá", "Cls").replace("C-", "Ch-")
     return re.sub(r'\s+', ' ', texto).strip()
 
-# --- TEMPLATE HTML OFICIAL (IGUAL AO SCRIPT V4.0) ---
+# --- TEMPLATE HTML ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -216,22 +238,25 @@ async def processar_dados():
 
         todos_itens = []
 
-        # Processamento e classificação dos dados de entrada
         for item in dados_brutos:
             texto_bruto = sanitizar_texto(item.get("text", "") or item.get("descricao", ""))
-            regiao = sanitizar_texto(item.get("regiao", "Geral"))
-            esta_ativo = item.get("estaAtivo", True)
             
-            # Se vier da API do Grafana, verifica status de conciliação
+            # Limpa o campo de região para exibir apenas a palavra chave (ex: SOSSEGO, SALOBO)
+            regiao_bruta = item.get("regiao", "GERAL")
+            regiao_limpa = extrair_regiao_limpa(regiao_bruta)
+
+            # Define se é ativo ou concluído
+            esta_ativo = item.get("estaAtivo", True)
             if "status" in item:
                 st_lower = str(item["status"]).lower()
                 if "concluid" in st_lower:
                     esta_ativo = False
+            if "[CONCLUIDO]" in texto_bruto or "[CONCLUÍDO]" in texto_bruto:
+                esta_ativo = False
 
             eh_programado = "ITOC-Programado" in texto_bruto or "[PROGRAMADO]" in texto_bruto
             eh_intermitente = "[INTERMITENTE]" in texto_bruto
 
-            # Definição de Status e Badges conforme Script V4.0
             if not esta_ativo:
                 status_txt = "Concluído"
                 status_badge_class = "badge-concluido"
@@ -246,13 +271,13 @@ async def processar_dados():
                 status_badge_class = "badge-andamento"
 
             tratando, descricao, noc = extrair_dados_texto(texto_bruto)
-            corredor = obter_corredor(regiao)
+            corredor = obter_corredor(regiao_limpa)
 
             todos_itens.append({
                 "dataAbertura": item.get("dataAbertura", item.get("data_abertura", "")),
                 "dataAtualizacao": item.get("dataAtualizacao", item.get("atualizacao", "")),
                 "dataFechamento": item.get("dataFechamento", item.get("fechamento", "") if not esta_ativo else ""),
-                "regiao": regiao,
+                "regiao": regiao_limpa,
                 "corredor": corredor,
                 "tratando": tratando or item.get("tratando", "ITOC"),
                 "descricao": descricao,
@@ -263,11 +288,11 @@ async def processar_dados():
             })
 
         # --- FILTRAGEM RIGOROSA DA REGRA V4.0 ---
-        # 1. Corredores trazem APENAS ATENDIMENTOS EM ABERTO (exclui Concluídos)
+        # Corredores Norte e Sul exibem EXCLUSIVAMENTE itens em aberto (removidos todos os Concluídos)
         itens_norte = [i for i in todos_itens if i["corredor"] == "Corredor Norte" and i["statusTxt"] != "Concluído"]
         itens_sul_sudeste = [i for i in todos_itens if i["corredor"] == "Corredor Sul e Sudeste" and i["statusTxt"] != "Concluído"]
         
-        # 2. Geral de Concluídos traz SOMENTE os finalizados do turno
+        # O Relatório Geral exibe SOMENTE os Concluídos do turno
         itens_concluidos = [i for i in todos_itens if i["statusTxt"] == "Concluído"]
 
         categorias = [
@@ -281,7 +306,6 @@ async def processar_dados():
         for cat in categorias:
             lista_itens = cat["itens"]
 
-            # Contadores KPI
             t_concluidos = sum(1 for i in lista_itens if i["statusTxt"] == "Concluído")
             t_andamento = sum(1 for i in lista_itens if i["statusTxt"] == "Em Andamento")
             t_programados = sum(1 for i in lista_itens if i["statusTxt"] == "Programado")
