@@ -49,8 +49,8 @@ def gerar_html_relatorio(itens, titulo_relatorio, periodo_turno, data_emissao):
       <meta charset="UTF-8">
       <style>
         * {{ box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }}
-        body {{ background: #fff; color: #333; margin: 0; padding: 15px; }}
-        .report-card {{ background: #fff; border-radius: 12px; padding: 20px; max-width: 100%; margin: 0 auto; }}
+        body {{ background: #ffffff; color: #333333; margin: 0; padding: 20px; }}
+        .report-card {{ background: #ffffff; border-radius: 12px; padding: 20px; max-width: 100%; margin: 0 auto; }}
         .header-top {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }}
         .sub-title {{ color: #8c9ba5; font-size: 13px; font-weight: bold; margin: 0; }}
         .main-title {{ color: #1e293b; font-size: 20px; font-weight: 800; margin: 4px 0; text-transform: uppercase; }}
@@ -151,23 +151,28 @@ def gerar_relatorio():
                 'statusBadgeClass': badge_class
             })
 
-        data_emissao = datetime.datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-        periodo_turno = f"{datetime.datetime.now().strftime('%d/%m/%Y')} (05:00 às 18:00)"
+        agora = datetime.datetime.now()
+        data_emissao = agora.strftime("%d/%m/%Y, %H:%M:%S")
+        periodo_turno = f"{agora.strftime('%d/%m/%Y')} (05:00 às 18:00)"
+        timestamp_str = agora.strftime('%Y%m%d_%H%M%S')
         
         html_content = gerar_html_relatorio(itens, "RELATÓRIO DE ATENDIMENTOS • CORREDOR NORTE", periodo_turno, data_emissao)
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            page = browser.new_page(viewport={"width": 1200, "height": 800})
             page.set_content(html_content)
+            
+            # Gera os dois ficheiros
             pdf_bytes = page.pdf(format="A4", landscape=True, print_background=True)
+            image_bytes = page.screenshot(full_page=True)
             browser.close()
 
-        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
-
         return jsonify({
-            "filename": f"Relatorio_Corredor_Norte_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-            "pdf_base64": pdf_base64
+            "filename": f"Relatorio_Corredor_Norte_{timestamp_str}.pdf",
+            "image_filename": f"Relatorio_Corredor_Norte_{timestamp_str}.png",
+            "pdf_base64": base64.b64encode(pdf_bytes).decode('utf-8'),
+            "image_base64": base64.b64encode(image_bytes).decode('utf-8')
         }), 200
 
     except Exception as e:
