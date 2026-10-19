@@ -10,7 +10,7 @@ import playwright.async_api as playwright_async
 
 app = Flask(__name__)
 
-# --- DICIONÁRIO DE REGISTRO E MAPA DE REGIÕES ---
+# --- MAPA DE REGIÕES E CORREDORES ---
 REGIOES_MAPA = {
     'CARAJAS': ('CARAJÁS', 'Corredor Norte'),
     'SALOBO': ('SALOBO', 'Corredor Norte'),
@@ -30,10 +30,9 @@ REGIOES_MAPA = {
 }
 
 def extrair_regiao_e_corredor(anotacao):
-    """Identifica a Região e o Corredor buscando nas tags e texto da anotação."""
+    """Extrai estritamente APENAS o nome da Região (ex: MG, SOSSEGO) e define o Corredor."""
     tags = anotacao.get('tags', [])
     texto = str(anotacao.get('text', '')).upper()
-    
     tags_str = ' '.join([str(t).upper() for t in tags])
     busca_total = f"{tags_str} {texto}"
 
@@ -47,11 +46,9 @@ def formatar_data_hora(ts):
     if not ts:
         return ""
     try:
-        # Se for timestamp numérico em milissegundos
         if isinstance(ts, (int, float)):
             dt = datetime.datetime.fromtimestamp(ts / 1000.0)
             return dt.strftime("%d/%m/%Y %H:%M")
-        # Se vier como string de data ISO
         dt = pd.to_datetime(ts)
         return dt.strftime("%d/%m/%Y %H:%M")
     except Exception:
@@ -79,6 +76,7 @@ def obter_intervalo_turno():
     }
 
 def limpar_e_extrair_descricao(texto_bruto):
+    """Remove todo o lixo do Grafana ([AGUARDANDO], C sá, [], etc)."""
     if not texto_bruto:
         return "ITOC", "", ""
     
@@ -89,7 +87,7 @@ def limpar_e_extrair_descricao(texto_bruto):
     texto = re.sub(r'\[\s*\]', '', texto)
     texto = texto.replace("C sá", "Cls").replace("C-", "Ch-")
     
-    # Remove prefixos
+    # Remove prefixos do Grafana/Userscript
     texto = re.sub(r'^\[AGUARDANDO\s*-\s*\d+\]\s*', '', texto, flags=re.IGNORECASE)
     texto = re.sub(r'^\[(ATENDIMENTO|PROGRAMADO|INTERMITENTE|CONCLUIDO|CONCLUÍDO)\]\s*', '', texto, flags=re.IGNORECASE)
     
@@ -233,8 +231,8 @@ async def processar_dados():
     try:
         payload = request.get_json(force=True)
         
-        # LÊ AS DUAS PROPRIEDADES ENVIADAS PELO POWER AUTOMATE
-        anotacoes = payload.get("anotacoes", [])
+        # Suporta tanto payload no formato 'anotacoes' quanto 'dados'
+        anotacoes = payload.get("anotacoes", payload.get("dados", []))
         alertas_ativos = payload.get("alertas_ativos", [])
         
         if not isinstance(anotacoes, list):
@@ -242,7 +240,7 @@ async def processar_dados():
         if not isinstance(alertas_ativos, list):
             alertas_ativos = []
 
-        # MAPEIA OS ALERTAS QUE ESTÃO ATIVOS NO MOMENTO NO GRAFANA
+        # Mapeia uids dos alertas que estão efetivamente ativos
         uids_ativos = set()
         for al in alertas_ativos:
             if isinstance(al, dict):
@@ -261,16 +259,16 @@ async def processar_dados():
                 
             texto_raw = str(an.get('text', ''))
             
-            # Identifica a regra do alerta pelas tags
             tags = an.get('tags', [])
             tag_alerta = next((t for t in tags if str(t).startswith('alerta:')), None)
-            rule_uid = tag_alerta.replace('alerta:', '') if tag_alerta else None
+            rule_uid = str(tag_alerta).replace('alerta:', '') if tag_alerta else None
 
-            # CRITÉRIO DE STATUS ATIVO vs CONCLUÍDO
-            esta_ativo_no_grafana = rule_uid in uids_ativos if rule_uid else False
-            
-            # Se contiver a palavra CONCLUIDO ou não estiver ativo no Grafana
-            eh_concluido = not esta_ativo_no_grafana or "[CONCLUIDO]" in texto_raw.upper() or "[CONCLUÍDO]" in texto_raw.upper()
+            # DETEÇÃO RIGOROSA DO STATUS CONCLUÍDO
+            # É concluído se contiver [CONCLUIDO] no texto OU se o rule_uid já não constar da lista de alertas ativos do Grafana
+            eh_concluido = "[CONCLUIDO]" in texto_raw.upper() or "[CONCLUÍDO]" in texto_raw.upper()
+            if uids_ativos and rule_uid and rule_uid not in uids_ativos:
+                eh_concluido = True
+
             eh_intermitente = "[INTERMITENTE]" in texto_raw.upper()
             eh_programado = "ITOC-PROGRAMADO" in texto_raw.upper() or "[PROGRAMADO]" in texto_raw.upper()
 
@@ -309,12 +307,10 @@ async def processar_dados():
                 "eh_concluido": eh_concluido
             })
 
-        # --- SEPARAÇÃO RIGOROSA DAS 3 CATEGORIAS (REGRA V4.0) ---
-        # 1. Corredores Norte e Sul EXCLUEM qualquer item Concluído
+        # --- SEPARAÇÃO RIGOROSA ---
+        # Filtra os relatórios para que Concluídos fiquem APENAS no Geral
         itens_norte = [i for i in todos_itens if i["corredor"] == "Corredor Norte" and not i["eh_concluido"]]
         itens_sul = [i for i in todos_itens if i["corredor"] == "Corredor Sul e Sudeste" and not i["eh_concluido"]]
-        
-        # 2. Relatório Geral de Concluídos recebe SOMENTE os finalizados
         itens_geral = [i for i in todos_itens if i["eh_concluido"]]
 
         categorias = [
