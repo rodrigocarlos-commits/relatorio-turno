@@ -16,12 +16,11 @@ def sanitizar_texto(texto):
     if not texto or pd.isna(texto):
         return ""
     texto = str(texto)
-    # Decodifica entidades HTML se houver
     texto = html.unescape(texto)
-    # Remove códigos de escape ANSI / caracteres de controle invisíveis
+    # Remove caracteres de controle invisíveis / ANSI
     texto = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', texto)
-    # Substitui sequências corrompidas conhecidas vindas da fonte
-    texto = texto.replace("C sá", "Cls").replace("[]", "").replace("", "")
+    # Corrige falhas conhecidas de codificação
+    texto = texto.replace("C sá", "Cls").replace("[]", "")
     return texto.strip()
 
 HTML_TEMPLATE = """
@@ -93,7 +92,6 @@ HTML_TEMPLATE = """
             display: inline-block;
             text-align: center;
         }
-        .status-concluido { background-color: #C6F6D5; color: #22543D; }
         .status-andamento { background-color: #FEEBC8; color: #742A2A; }
         .status-intermitente { background-color: #E9D8FD; color: #44337A; }
 
@@ -141,13 +139,9 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="cards-container">
-        <div class="card"><span style="font-size: 15px; color: #2B6CB0;">{{ total_atendimentos }}</span> atendimentos neste relatório</div>
-        {% if 'GERAL' in regiao_titulo %}
-            <div class="card"><span class="status-pill status-concluido">{{ qtd_concluidos }} Concluídos</span></div>
-        {% else %}
-            <div class="card"><span class="status-pill status-andamento">{{ qtd_andamento }} Em Andamento</span></div>
-            <div class="card"><span class="status-pill status-intermitente">{{ qtd_intermitentes }} Intermitentes</span></div>
-        {% endif %}
+        <div class="card"><span style="font-size: 15px; color: #2B6CB0;">{{ total_atendimentos }}</span> atendimentos pendentes</div>
+        <div class="card"><span class="status-pill status-andamento">{{ qtd_andamento }} Em Andamento</span></div>
+        <div class="card"><span class="status-pill status-intermitente">{{ qtd_intermitentes }} Intermitentes</span></div>
     </div>
 
     <table>
@@ -170,9 +164,7 @@ HTML_TEMPLATE = """
                 <td>{{ item.tratando }}</td>
                 <td class="col-desc">{{ item.descricao }}</td>
                 <td class="col-status">
-                    {% if item.status_limpo == 'concluido' %}
-                        <span class="status-pill status-concluido">Concluído</span>
-                    {% elif item.status_limpo == 'intermitente' %}
+                    {% if item.status_limpo == 'intermitente' %}
                         <span class="status-pill status-intermitente">Intermitente</span>
                     {% else %}
                         <span class="status-pill status-andamento">Em Andamento</span>
@@ -213,19 +205,24 @@ async def processar_dados():
 
         df = pd.DataFrame(dados_brutos)
         
-        # Limpeza global de strings
+        # Limpeza de caracteres em todas as colunas
         for col in df.columns:
             df[col] = df[col].apply(sanitizar_texto)
 
-        # Mapeamento estrito de status
+        # -------------------------------------------------------------
+        # REMOÇÃO ESTRITA DE CONCLUÍDOS DA BASE INTEIRA
+        # -------------------------------------------------------------
+        df = df[~df["status"].str.lower().str.contains("concluid", na=False)].copy()
+        df = df[~df["descricao"].str.upper().str.contains("\[CONCLUIDO\]|\[CONCLUÍDO\]", na=False)].copy()
+
+        if df.empty:
+            return jsonify({"relatorios": []}), 200
+
+        # Mapeamento do status restante
         def mapear_status(st):
-            st_lower = str(st).lower()
-            if "concluid" in st_lower:
-                return "concluido"
-            elif "intermitent" in st_lower:
+            if "intermitent" in str(st).lower():
                 return "intermitente"
-            else:
-                return "andamento"
+            return "andamento"
 
         df["status_normalizado"] = df["status"].apply(mapear_status)
 
@@ -238,19 +235,16 @@ async def processar_dados():
 
         for reg in regioes:
             if reg == "GERAL":
-                # GERAL: Apenas os estritamente Concluídos
-                df_reg = df[df["status_normalizado"] == "concluido"].copy()
+                # Mostra todos os atendimentos pendentes de todas as regiões
+                df_reg = df.copy()
             else:
-                # DEMAIS REGIÕES: Apenas Em Andamento ou Intermitentes (EXCLUI Concluídos)
-                # Verifica a região no campo 'regiao' ou na 'descricao'
+                # Filtra por região específica
                 mask_reg = df["regiao"].str.upper().str.contains(reg, na=False) | df["descricao"].str.upper().str.contains(reg, na=False)
-                mask_status = df["status_normalizado"].isin(["andamento", "intermitente"])
-                df_reg = df[mask_reg & mask_status].copy()
+                df_reg = df[mask_reg].copy()
 
             if df_reg.empty:
                 continue
 
-            qtd_concluidos = len(df_reg[df_reg["status_normalizado"] == "concluido"])
             qtd_andamento = len(df_reg[df_reg["status_normalizado"] == "andamento"])
             qtd_intermitentes = len(df_reg[df_reg["status_normalizado"] == "intermitente"])
 
@@ -267,11 +261,10 @@ async def processar_dados():
 
             template = Template(HTML_TEMPLATE)
             html_final = template.render(
-                regiao_titulo=f"CORREDOR {reg}" if reg != "GERAL" else "GERAL",
+                regiao_titulo=f"CORREDOR {reg}" if reg != "GERAL" else "GERAL (TODOS PENDENTES)",
                 data_hoje=data_hoje,
                 hora_geracao=hora_geracao,
                 total_atendimentos=len(lista_itens),
-                qtd_concluidos=qtd_concluidos,
                 qtd_andamento=qtd_andamento,
                 qtd_intermitentes=qtd_intermitentes,
                 itens=lista_itens
