@@ -11,169 +11,176 @@ import playwright.async_api as playwright_async
 
 app = Flask(__name__)
 
+# --- REGRA DE NEGÓCIO: DEFINIÇÃO DE CORREDOR ---
+def obter_corredor(regiao):
+    r = str(regiao or '').upper().strip()
+    if any(k in r for k in ['MG', 'VIX', 'ES', 'RJ', 'VALE RJ', 'SUDESTE', 'SUL']):
+        return 'Corredor Sul e Sudeste'
+    return 'Corredor Norte'
+
+# --- REGRA DE NEGÓCIO: INTERVALO DE TURNO (05:00-18:00 / 17:00-06:00) ---
+def obter_intervalo_turno():
+    agora = datetime.datetime.now()
+    hora_atual = agora.hour
+
+    if 5 <= hora_atual < 18:
+        inicio_turno = agora.replace(hour=5, minute=0, second=0, microsecond=0)
+        fim_turno = agora.replace(hour=18, minute=0, second=0, microsecond=0)
+    else:
+        if hora_atual >= 18:
+            inicio_turno = agora.replace(hour=17, minute=0, second=0, microsecond=0)
+            fim_turno = (agora + datetime.timedelta(days=1)).replace(hour=6, minute=0, second=0, microsecond=0)
+        else:
+            inicio_turno = (agora - datetime.timedelta(days=1)).replace(hour=17, minute=0, second=0, microsecond=0)
+            fim_turno = agora.replace(hour=6, minute=0, second=0, microsecond=0)
+
+    return {
+        "inicio_ms": int(inicio_turno.timestamp() * 1000),
+        "fim_ms": int(fim_turno.timestamp() * 1000),
+        "inicio_str": inicio_turno.strftime("%H:%M"),
+        "fim_str": fim_turno.strftime("%H:%M"),
+        "data_str": inicio_turno.strftime("%d/%m/%Y")
+    }
+
+# --- REGRA DE NEGÓCIO: EXTRAÇÃO DE TRATANDO, DESCRIÇÃO E NOC DO TEXTO ---
+def extrair_dados_texto(texto):
+    texto = str(texto or '')
+    tratando = ""
+    descricao = texto
+    noc = ""
+
+    # Extrai quem está tratando
+    match_tratando = re.search(r'(?:\[INTERMITENTE\]\s*)?^(.*?)\s+está tratando', texto, re.IGNORECASE)
+    if match_tratando:
+        tratando = match_tratando.group(1).strip()
+
+    # Extrai descrição entre aspas
+    match_desc = re.search(r'"([^"]+)"', texto)
+    if match_desc:
+        descricao = match_desc.group(1).strip()
+
+    # Extrai o chamado NOC
+    match_noc = re.search(r'\(chamado nº\s*([^)]+)\)', texto, re.IGNORECASE)
+    if match_noc:
+        noc = match_noc.group(1).strip()
+
+    return tratando, descricao, noc
+
 def sanitizar_texto(texto):
-    """Limpa caracteres estranhos, codificações ANSI e símbolos corrompidos."""
     if not texto or pd.isna(texto):
         return ""
     texto = str(texto)
     texto = html.unescape(texto)
-    # Remove caracteres de controle invisíveis / ANSI
     texto = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', texto)
-    # Corrige falhas conhecidas de codificação
-    texto = texto.replace("C sá", "Cls").replace("[]", "")
-    return texto.strip()
+    texto = re.sub(r'\[\s*\]', '', texto)
+    texto = texto.replace("C sá", "Cls").replace("C-", "Ch-")
+    return re.sub(r'\s+', ' ', texto).strip()
 
+# --- TEMPLATE HTML OFICIAL (IGUAL AO SCRIPT V4.0) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <title>Relatório de Atendimentos</title>
+    <title>{{ titulo_relatorio }}</title>
     <style>
-        @page {
-            size: A4 landscape;
-            margin: 10mm;
-        }
-        body {
-            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-            color: #2D3748;
-            margin: 0;
-            padding: 0;
-            font-size: 10px;
-            background-color: #ffffff;
-        }
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-            border-bottom: 2px solid #E2E8F0;
-            padding-bottom: 6px;
-        }
-        .title {
-            font-size: 16px;
-            font-weight: bold;
-            color: #1A202C;
-            text-transform: uppercase;
-        }
-        .subtitle {
-            font-size: 10px;
-            color: #718096;
-            margin-top: 2px;
-        }
-        .badge-gerado {
-            background-color: #FEFCBF;
-            color: #744210;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-weight: bold;
-            font-size: 9px;
-            text-align: right;
-        }
-        .cards-container {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 12px;
-            background-color: #F7FAFC;
-            padding: 8px 12px;
-            border-radius: 6px;
-            border: 1px solid #E2E8F0;
-            align-items: center;
-        }
-        .card {
-            font-weight: bold;
-            font-size: 11px;
-        }
-        .status-pill {
-            padding: 3px 8px;
-            border-radius: 12px;
-            font-size: 9px;
-            font-weight: bold;
-            display: inline-block;
-            text-align: center;
-        }
-        .status-andamento { background-color: #FEEBC8; color: #742A2A; }
-        .status-intermitente { background-color: #E9D8FD; color: #44337A; }
+        @page { size: A4 landscape; margin: 8mm; }
+        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body { background: #fff; color: #333; margin: 0; padding: 10px; font-size: 11px; }
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 5px;
-        }
-        tr {
-            page-break-inside: avoid;
-        }
-        th {
-            background-color: #EDF2F7;
-            color: #4A5568;
-            font-weight: bold;
-            text-align: left;
-            padding: 6px 5px;
-            border-bottom: 2px solid #CBD5E0;
-            font-size: 9px;
-            text-transform: uppercase;
-        }
-        td {
-            padding: 5px;
-            border-bottom: 1px solid #E2E8F0;
-            font-size: 9px;
-            vertical-align: top;
-            word-wrap: break-word;
-        }
-        .col-data { width: 11%; }
-        .col-regiao { width: 18%; font-weight: 600; }
-        .col-tratando { width: 10%; }
-        .col-desc { width: 49%; }
-        .col-status { width: 12%; text-align: center; }
+        .report-card { width: 100%; max-width: 1400px; margin: 0 auto; }
+        .header-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
+        .sub-title { color: #8c9ba5; font-size: 11px; font-weight: bold; margin: 0; }
+        .main-title { color: #1e293b; font-size: 18px; font-weight: 800; margin: 2px 0; text-transform: uppercase; }
+        .meta-info { color: #64748b; font-size: 11px; font-weight: 600; margin-top: 2px; }
+
+        .tag-gerado { background: #fff8f0; border: 1px solid #ffedd5; color: #d97706; padding: 4px 10px; border-radius: 6px; font-size: 10px; font-weight: bold; text-align: right; }
+
+        .kpi-container { display: flex; align-items: center; gap: 15px; background: #f8fafc; padding: 10px 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #e2e8f0; }
+        .big-number { font-size: 28px; font-weight: 800; color: #0f172a; line-height: 1; }
+        .big-label { font-size: 10px; color: #64748b; font-weight: 600; display: block; margin-top: 2px; }
+
+        .kpi-bars { display: flex; gap: 12px; flex: 1; align-items: center; border-left: 2px solid #e2e8f0; padding-left: 15px; }
+        .kpi-item { font-size: 11px; font-weight: bold; color: #475569; display: flex; align-items: center; gap: 4px; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 5px; page-break-inside: auto; }
+        tr { page-break-inside: avoid; }
+        th { text-align: left; padding: 6px 5px; border-bottom: 2px solid #e2e8f0; color: #64748b; font-size: 10px; font-weight: 700; text-transform: uppercase; background: #f8fafc; }
+        td { padding: 6px 5px; border-bottom: 1px solid #f1f5f9; font-size: 10px; color: #334155; vertical-align: top; word-wrap: break-word; }
+
+        .badge { padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; display: inline-block; white-space: nowrap; text-align: center; }
+        .badge-concluido { background: #dcfce7; color: #15803d; }
+        .badge-andamento { background: #fef3c7; color: #b45309; }
+        .badge-programado { background: #dbeafe; color: #1d4ed8; }
+        .badge-intermitente { background: #f3e8ff; color: #7e22ce; border: 1px solid #e9d5ff; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <div>
-            <div class="title">RELATÓRIO DE ATENDIMENTOS • {{ regiao_titulo }}</div>
-            <div class="subtitle">Turno Vigente: {{ data_hoje }}</div>
+    <div class="report-card">
+        <div class="header-top">
+            <div>
+                <p class="sub-title">NOC Aldak • Central de Alertas ITOC</p>
+                <h1 class="main-title">{{ titulo_relatorio }}</h1>
+                <p class="meta-info">Turno Vigente: {{ meta_turno }}</p>
+            </div>
+            <div class="tag-gerado">
+                <div>Relatório Gerado em</div>
+                <div>{{ data_emissao }}</div>
+            </div>
         </div>
-        <div class="badge-gerado">
-            Relatório Gerado em<br>{{ hora_geracao }}
+
+        <div class="kpi-container">
+            <div>
+                <div class="big-number">{{ itens|length }}</div>
+                <span class="big-label">atendimentos neste relatório</span>
+            </div>
+            <div class="kpi-bars">
+                <div class="kpi-item">🟢 <b>{{ total_concluidos }}</b> Concluídos</div>
+                <div class="kpi-item">🟡 <b>{{ total_andamento }}</b> Em Andamento</div>
+                <div class="kpi-item">🔵 <b>{{ total_programados }}</b> Programados</div>
+                <div class="kpi-item">🟣 <b>{{ total_intermitentes }}</b> Intermitentes</div>
+            </div>
         </div>
-    </div>
 
-    <div class="cards-container">
-        <div class="card"><span style="font-size: 15px; color: #2B6CB0;">{{ total_atendimentos }}</span> atendimentos pendentes</div>
-        <div class="card"><span class="status-pill status-andamento">{{ qtd_andamento }} Em Andamento</span></div>
-        <div class="card"><span class="status-pill status-intermitente">{{ qtd_intermitentes }} Intermitentes</span></div>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 105px;">Data / Abertura</th>
+                    <th style="width: 105px;">Atualização</th>
+                    <th style="width: 105px;">Fechamento</th>
+                    <th style="width: 100px;">Região / Site</th>
+                    <th style="width: 90px;">Tratando</th>
+                    <th>Descrição do Atendimento</th>
+                    <th style="width: 90px;">NOC</th>
+                    <th style="width: 45px;">VSC</th>
+                    <th style="width: 100px; text-align: center;">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if itens|length == 0 %}
+                <tr>
+                    <td colspan="9" style="text-align:center; padding: 20px; color: #94a3b8;">Nenhum atendimento nesta categoria para o turno atual.</td>
+                </tr>
+                {% else %}
+                {% for item in itens %}
+                <tr>
+                    <td style="white-space: nowrap;">{{ item.dataAbertura }}</td>
+                    <td style="white-space: nowrap;">{{ item.dataAtualizacao }}</td>
+                    <td style="white-space: nowrap;">{{ item.dataFechamento }}</td>
+                    <td><b>{{ item.regiao }}</b></td>
+                    <td>{{ item.tratando }}</td>
+                    <td>{{ item.descricao }}</td>
+                    <td>{{ item.noc }}</td>
+                    <td>{{ item.vsc }}</td>
+                    <td style="text-align: center;">
+                        <span class="badge {{ item.statusBadgeClass }}">{{ item.statusTxt }}</span>
+                    </td>
+                </tr>
+                {% endfor %}
+                {% endif %}
+            </tbody>
+        </table>
     </div>
-
-    <table>
-        <thead>
-            <tr>
-                <th class="col-data">DATA / ABERTURA</th>
-                <th class="col-data">ATUALIZAÇÃO</th>
-                <th class="col-regiao">REGIÃO / SITE</th>
-                <th class="col-tratando">TRATANDO</th>
-                <th class="col-desc">DESCRIÇÃO DO ATENDIMENTO</th>
-                <th class="col-status">STATUS</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for item in itens %}
-            <tr>
-                <td>{{ item.data_abertura }}</td>
-                <td>{{ item.atualizacao }}</td>
-                <td class="col-regiao">{{ item.regiao_site }}</td>
-                <td>{{ item.tratando }}</td>
-                <td class="col-desc">{{ item.descricao }}</td>
-                <td class="col-status">
-                    {% if item.status_limpo == 'intermitente' %}
-                        <span class="status-pill status-intermitente">Intermitente</span>
-                    {% else %}
-                        <span class="status-pill status-andamento">Em Andamento</span>
-                    {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
 </body>
 </html>
 """
@@ -203,70 +210,92 @@ async def processar_dados():
         if not dados_brutos:
             return jsonify({"error": "Nenhum dado recebido"}), 400
 
-        df = pd.DataFrame(dados_brutos)
+        turno = obter_intervalo_turno()
+        meta_turno = f"{turno['data_str']} ({turno['inicio_str']} às {turno['fim_str']})"
+        data_emissao = datetime.datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
+
+        todos_itens = []
+
+        # Processamento e classificação dos dados de entrada
+        for item in dados_brutos:
+            texto_bruto = sanitizar_texto(item.get("text", "") or item.get("descricao", ""))
+            regiao = sanitizar_texto(item.get("regiao", "Geral"))
+            esta_ativo = item.get("estaAtivo", True)
+            
+            # Se vier da API do Grafana, verifica status de conciliação
+            if "status" in item:
+                st_lower = str(item["status"]).lower()
+                if "concluid" in st_lower:
+                    esta_ativo = False
+
+            eh_programado = "ITOC-Programado" in texto_bruto or "[PROGRAMADO]" in texto_bruto
+            eh_intermitente = "[INTERMITENTE]" in texto_bruto
+
+            # Definição de Status e Badges conforme Script V4.0
+            if not esta_ativo:
+                status_txt = "Concluído"
+                status_badge_class = "badge-concluido"
+            elif eh_intermitente:
+                status_txt = "Intermitente"
+                status_badge_class = "badge-intermitente"
+            elif eh_programado:
+                status_txt = "Programado"
+                status_badge_class = "badge-programado"
+            else:
+                status_txt = "Em Andamento"
+                status_badge_class = "badge-andamento"
+
+            tratando, descricao, noc = extrair_dados_texto(texto_bruto)
+            corredor = obter_corredor(regiao)
+
+            todos_itens.append({
+                "dataAbertura": item.get("dataAbertura", item.get("data_abertura", "")),
+                "dataAtualizacao": item.get("dataAtualizacao", item.get("atualizacao", "")),
+                "dataFechamento": item.get("dataFechamento", item.get("fechamento", "") if not esta_ativo else ""),
+                "regiao": regiao,
+                "corredor": corredor,
+                "tratando": tratando or item.get("tratando", "ITOC"),
+                "descricao": descricao,
+                "noc": noc,
+                "vsc": item.get("vsc", ""),
+                "statusTxt": status_txt,
+                "statusBadgeClass": status_badge_class
+            })
+
+        # --- FILTRAGEM RIGOROSA DA REGRA V4.0 ---
+        # 1. Corredores trazem APENAS ATENDIMENTOS EM ABERTO (exclui Concluídos)
+        itens_norte = [i for i in todos_itens if i["corredor"] == "Corredor Norte" and i["statusTxt"] != "Concluído"]
+        itens_sul_sudeste = [i for i in todos_itens if i["corredor"] == "Corredor Sul e Sudeste" and i["statusTxt"] != "Concluído"]
         
-        # Limpeza de caracteres em todas as colunas
-        for col in df.columns:
-            df[col] = df[col].apply(sanitizar_texto)
+        # 2. Geral de Concluídos traz SOMENTE os finalizados do turno
+        itens_concluidos = [i for i in todos_itens if i["statusTxt"] == "Concluído"]
 
-        # -------------------------------------------------------------
-        # REMOÇÃO ESTRITA DE CONCLUÍDOS DA BASE INTEIRA
-        # -------------------------------------------------------------
-        df = df[~df["status"].str.lower().str.contains("concluid", na=False)].copy()
-        df = df[~df["descricao"].str.upper().str.contains("\[CONCLUIDO\]|\[CONCLUÍDO\]", na=False)].copy()
+        categorias = [
+            {"chave": "NORTE", "titulo": "RELATÓRIO DE ATENDIMENTOS • CORREDOR NORTE", "itens": itens_norte},
+            {"chave": "SUL_SUDESTE", "titulo": "RELATÓRIO DE ATENDIMENTOS • CORREDOR SUL E SUDESTE", "itens": itens_sul_sudeste},
+            {"chave": "GERAL_CONCLUIDOS", "titulo": "RELATÓRIO GERAL • ATENDIMENTOS CONCLUÍDOS DO TURNO", "itens": itens_concluidos}
+        ]
 
-        if df.empty:
-            return jsonify({"relatorios": []}), 200
-
-        # Mapeamento do status restante
-        def mapear_status(st):
-            if "intermitent" in str(st).lower():
-                return "intermitente"
-            return "andamento"
-
-        df["status_normalizado"] = df["status"].apply(mapear_status)
-
-        regioes = ["NORTE", "SUL", "LESTE", "GERAL"]
         relatorios_output = []
 
-        agora = datetime.datetime.now()
-        data_hoje = agora.strftime("%d/%m/%Y (05:00 às 18:00)")
-        hora_geracao = agora.strftime("%d/%m/%Y, %H:%M:%S")
+        for cat in categorias:
+            lista_itens = cat["itens"]
 
-        for reg in regioes:
-            if reg == "GERAL":
-                # Mostra todos os atendimentos pendentes de todas as regiões
-                df_reg = df.copy()
-            else:
-                # Filtra por região específica
-                mask_reg = df["regiao"].str.upper().str.contains(reg, na=False) | df["descricao"].str.upper().str.contains(reg, na=False)
-                df_reg = df[mask_reg].copy()
-
-            if df_reg.empty:
-                continue
-
-            qtd_andamento = len(df_reg[df_reg["status_normalizado"] == "andamento"])
-            qtd_intermitentes = len(df_reg[df_reg["status_normalizado"] == "intermitente"])
-
-            lista_itens = []
-            for _, row in df_reg.iterrows():
-                lista_itens.append({
-                    "data_abertura": row.get("data_abertura", ""),
-                    "atualizacao": row.get("atualizacao", ""),
-                    "regiao_site": f"{row.get('regiao', '')} - {row.get('site', '')}".strip(" -"),
-                    "tratando": row.get("tratando", "ITOC"),
-                    "descricao": row.get("descricao", ""),
-                    "status_limpo": row.get("status_normalizado", "andamento")
-                })
+            # Contadores KPI
+            t_concluidos = sum(1 for i in lista_itens if i["statusTxt"] == "Concluído")
+            t_andamento = sum(1 for i in lista_itens if i["statusTxt"] == "Em Andamento")
+            t_programados = sum(1 for i in lista_itens if i["statusTxt"] == "Programado")
+            t_intermitentes = sum(1 for i in lista_itens if i["statusTxt"] == "Intermitente")
 
             template = Template(HTML_TEMPLATE)
             html_final = template.render(
-                regiao_titulo=f"CORREDOR {reg}" if reg != "GERAL" else "GERAL (TODOS PENDENTES)",
-                data_hoje=data_hoje,
-                hora_geracao=hora_geracao,
-                total_atendimentos=len(lista_itens),
-                qtd_andamento=qtd_andamento,
-                qtd_intermitentes=qtd_intermitentes,
+                titulo_relatorio=cat["titulo"],
+                meta_turno=meta_turno,
+                data_emissao=data_emissao,
+                total_concluidos=t_concluidos,
+                total_andamento=t_andamento,
+                total_programados=t_programados,
+                total_intermitentes=t_intermitentes,
                 itens=lista_itens
             )
 
@@ -275,10 +304,10 @@ async def processar_dados():
             pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
             img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
-            nome_base = f"Relatorio_GMG_{reg}_{agora.strftime('%d-%m-%Y')}"
+            nome_base = f"Relatorio_GMG_{cat['chave']}_{datetime.datetime.now().strftime('%d-%m-%Y')}"
 
             relatorios_output.append({
-                "regiao": reg,
+                "regiao": cat["chave"],
                 "filename": f"{nome_base}.pdf",
                 "image_filename": f"{nome_base}.png",
                 "pdf_base64": pdf_b64,
