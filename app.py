@@ -1,208 +1,300 @@
-import os
-import datetime
 import base64
-from flask import Flask, request, jsonify
-from playwright.sync_api import sync_playwright
+import datetime
+import html
+import io
+import os
+import re
+import pandas as pd
+from flask import Flask, jsonify, request
+from jinja2 import Template
+import playwright.async_api as playwright_async
 
 app = Flask(__name__)
 
-API_KEY = os.environ.get("API_KEY", "SUA_CHAVE_AQUI")
+# Configuração de suporte para acentos e símbolos especiais
+def limpar_texto(texto):
+    if not texto or pd.isna(texto):
+        return ""
+    texto = str(texto)
+    # Garante decodificação limpa UTF-8 e escape de entidades HTML
+    texto = html.unescape(texto)
+    return texto
 
-def extrair_regiao(texto, tags):
-    tags_str = " ".join([str(t).upper() for t in tags])
-    text_upper = str(texto).upper()
-    if any(k in tags_str or k in text_upper for k in ['CARAJAS', 'SALOBO', 'SOSSEGO', 'EFC', 'NORTE']):
-        return 'NORTE'
-    return 'SUL_SUDESTE'
+# Template HTML com codificação UTF-8 explícita e regras CSS para layout
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Relatório de Atendimentos</title>
+    <style>
+        @page {
+            size: A4 landscape;
+            margin: 12mm 10mm 12mm 10mm;
+        }
+        body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            color: #2D3748;
+            margin: 0;
+            padding: 0;
+            font-size: 10px;
+            background-color: #ffffff;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #E2E8F0;
+            padding-bottom: 8px;
+        }
+        .title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #1A202C;
+            text-transform: uppercase;
+        }
+        .subtitle {
+            font-size: 11px;
+            color: #718096;
+            margin-top: 3px;
+        }
+        .badge-gerado {
+            background-color: #FEFCBF;
+            color: #744210;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 10px;
+        }
+        .cards-container {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+            background-color: #F7FAFC;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #E2E8F0;
+        }
+        .card {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: bold;
+        }
+        .status-pill {
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 9px;
+            font-weight: bold;
+            text-transform: capitalize;
+            display: inline-block;
+            text-align: center;
+        }
+        .status-concluido { background-color: #C6F6D5; color: #22543D; }
+        .status-andamento { background-color: #FEEBC8; color: #742A2A; }
+        .status-intermitente { background-color: #E9D8FD; color: #44337A; }
+        .status-programado { background-color: #BEE3F8; color: #2B6CB0; }
 
-def gerar_html_relatorio(itens, titulo_relatorio, periodo_turno, data_emissao):
-    total_concluidos = sum(1 for i in itens if i.get('statusTxt') == 'Concluído')
-    total_andamento = sum(1 for i in itens if i.get('statusTxt') == 'Em Andamento')
-    total_programados = sum(1 for i in itens if i.get('statusTxt') == 'Programado')
-    total_intermitentes = sum(1 for i in itens if i.get('statusTxt') == 'Intermitente')
-
-    linhas_html = ""
-    if not itens:
-        linhas_html = '<tr><td colspan="9" style="text-align:center; padding: 20px; color: #94a3b8;">Nenhum atendimento ativo nesta categoria para o ciclo do turno atual.</td></tr>'
-    else:
-        for item in itens:
-            linhas_html += f"""
-            <tr>
-              <td style="white-space: nowrap;">{item.get('dataAbertura', '')}</td>
-              <td style="white-space: nowrap;">{item.get('dataAtualizacao', '')}</td>
-              <td style="white-space: nowrap;">{item.get('dataFechamento', '')}</td>
-              <td><b>{item.get('regiao', '')}</b></td>
-              <td>{item.get('tratando', '')}</td>
-              <td>{item.get('descricao', '')}</td>
-              <td>{item.get('noc', '')}</td>
-              <td>{item.get('vsc', '')}</td>
-              <td style="text-align: center;">
-                <span class="badge {item.get('statusBadgeClass', 'badge-intermitente')}">{item.get('statusTxt', '')}</span>
-              </td>
-            </tr>
-            """
-
-    return f"""
-    <!DOCTYPE html>
-    <html lang="pt-BR">
-    <head>
-      <meta charset="UTF-8">
-      <style>
-        * {{ box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }}
-        body {{ background: #ffffff; color: #333333; margin: 0; padding: 20px; }}
-        .report-card {{ background: #ffffff; border-radius: 12px; padding: 20px; max-width: 100%; margin: 0 auto; }}
-        .header-top {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }}
-        .sub-title {{ color: #8c9ba5; font-size: 13px; font-weight: bold; margin: 0; }}
-        .main-title {{ color: #1e293b; font-size: 20px; font-weight: 800; margin: 4px 0; text-transform: uppercase; }}
-        .meta-info {{ color: #64748b; font-size: 12px; font-weight: 600; }}
-        .tag-gerado {{ background: #fff8f0; border: 1px solid #ffedd5; color: #d97706; padding: 6px 14px; border-radius: 8px; font-size: 11px; font-weight: bold; text-align: right; }}
-        .kpi-container {{ display: flex; align-items: center; gap: 20px; background: #f8fafc; padding: 14px 18px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #e2e8f0; }}
-        .big-number {{ font-size: 32px; font-weight: 800; color: #0f172a; line-height: 1; }}
-        .big-label {{ font-size: 11px; color: #64748b; font-weight: 600; display: block; margin-top: 4px; }}
-        .kpi-bars {{ display: flex; gap: 15px; flex: 1; align-items: center; border-left: 2px solid #e2e8f0; padding-left: 20px; flex-wrap: wrap; }}
-        .kpi-item {{ font-size: 12px; font-weight: bold; color: #475569; display: flex; align-items: center; gap: 6px; }}
-        table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-        th {{ text-align: left; padding: 8px 6px; border-bottom: 2px solid #e2e8f0; color: #64748b; font-size: 10px; font-weight: 700; text-transform: uppercase; }}
-        td {{ padding: 8px 6px; border-bottom: 1px solid #f1f5f9; font-size: 11px; color: #334155; }}
-        .badge {{ padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; display: inline-block; white-space: nowrap; text-align: center; }}
-        .badge-concluido {{ background: #dcfce7; color: #15803d; }}
-        .badge-andamento {{ background: #fef3c7; color: #b45309; }}
-        .badge-programado {{ background: #dbeafe; color: #1d4ed8; }}
-        .badge-intermitente {{ background: #f3e8ff; color: #7e22ce; border: 1px solid #e9d5ff; }}
-      </style>
-    </head>
-    <body>
-      <div class="report-card">
-        <div class="header-top">
-          <div>
-            <p class="sub-title">NOC Aldak • Central de Alertas ITOC</p>
-            <h1 class="main-title">{titulo_relatorio}</h1>
-            <p class="meta-info">Turno Vigente: {periodo_turno}</p>
-          </div>
-          <div class="tag-gerado">
-            <div>Relatório Gerado em</div>
-            <div>{data_emissao}</div>
-          </div>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 5px;
+            page-break-inside: auto;
+        }
+        tr {
+            page-break-inside: avoid;
+            page-break-after: auto;
+        }
+        th {
+            background-color: #EDF2F7;
+            color: #4A5568;
+            font-weight: bold;
+            text-align: left;
+            padding: 6px 5px;
+            border-bottom: 2px solid #CBD5E0;
+            font-size: 9px;
+            text-transform: uppercase;
+        }
+        td {
+            padding: 5px;
+            border-bottom: 1px solid #E2E8F0;
+            font-size: 9px;
+            vertical-align: top;
+            word-wrap: break-word;
+        }
+        .col-data { width: 10%; }
+        .col-regiao { width: 15%; font-weight: 600; }
+        .col-tratando { width: 8%; }
+        .col-desc { width: 45%; }
+        .col-status { width: 10%; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <div class="title">RELATÓRIO DE ATENDIMENTOS • {{ regiao_titulo }}</div>
+            <div class="subtitle">Turno Vigente: {{ data_hoje }}</div>
         </div>
-
-        <div class="kpi-container">
-          <div>
-            <div class="big-number">{len(itens)}</div>
-            <span class="big-label">atendimentos neste relatório</span>
-          </div>
-          <div class="kpi-bars">
-            <div class="kpi-item">🟢 <b>{total_concluidos}</b> Concluídos</div>
-            <div class="kpi-item">🟡 <b>{total_andamento}</b> Em Andamento</div>
-            <div class="kpi-item">🔵 <b>{total_programados}</b> Programados</div>
-            <div class="kpi-item">🟣 <b>{total_intermitentes}</b> Intermitentes</div>
-          </div>
+        <div class="badge-gerado">
+            Relatório Gerado em<br>{{ hora_geracao }}
         </div>
+    </div>
 
-        <table>
-          <thead>
+    <div class="cards-container">
+        <div class="card"><span style="font-size: 16px;">{{ total_atendimentos }}</span> atendimentos neste relatório</div>
+        <div class="card"><span class="status-pill status-concluido">{{ qtd_concluidos }} Concluídos</span></div>
+        <div class="card"><span class="status-pill status-andamento">{{ qtd_andamento }} Em Andamento</span></div>
+        <div class="card"><span class="status-pill status-intermitente">{{ qtd_intermitentes }} Intermitentes</span></div>
+    </div>
+
+    <table>
+        <thead>
             <tr>
-              <th style="width: 110px;">Data / Abertura</th>
-              <th style="width: 110px;">Atualização</th>
-              <th style="width: 110px;">Fechamento</th>
-              <th style="width: 100px;">Região / Site</th>
-              <th style="width: 90px;">Tratando</th>
-              <th>Descrição do Atendimento</th>
-              <th style="width: 90px;">NOC</th>
-              <th style="width: 50px;">VSC</th>
-              <th style="width: 110px; text-align: center;">Status</th>
+                <th class="col-data">DATA / ABERTURA</th>
+                <th class="col-data">ATUALIZAÇÃO</th>
+                <th class="col-regiao">REGIÃO / SITE</th>
+                <th class="col-tratando">TRATANDO</th>
+                <th class="col-desc">DESCRIÇÃO DO ATENDIMENTO</th>
+                <th class="col-status">STATUS</th>
             </tr>
-          </thead>
-          <tbody>
-            {linhas_html}
-          </tbody>
-        </table>
-      </div>
-    </body>
-    </html>
-    """
+        </thead>
+        <tbody>
+            {% for item in itens %}
+            <tr>
+                <td>{{ item.data_abertura }}</td>
+                <td>{{ item.atualizacao }}</td>
+                <td class="col-regiao">{{ item.regiao_site }}</td>
+                <td>{{ item.tratando }}</td>
+                <td class="col-desc">{{ item.descricao }}</td>
+                <td class="col-status">
+                    {% if 'concluid' in item.status.lower() %}
+                        <span class="status-pill status-concluido">Concluído</span>
+                    {% elif 'intermitent' in item.status.lower() %}
+                        <span class="status-pill status-intermitente">Intermitente</span>
+                    {% else %}
+                        <span class="status-pill status-andamento">Em Andamento</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>
+"""
 
-@app.route('/gerar', methods=['POST'])
-def gerar_relatorio():
-    try:
-        dados = request.get_json() or {}
-        anotacoes = dados.get('anotacoes', [])
+async def render_pdf_and_image(html_content):
+    """Utiliza o Playwright para gerar o PDF e a Imagem PNG a partir do HTML em UTF-8."""
+    async with playwright_async.async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page(viewport={"width": 1280, "height": 800})
         
-        itens_norte = []
-        itens_sul_sudeste = []
-        itens_geral = []
+        # Define o conteúdo da página garantindo suporte a caracteres UTF-8
+        await page.set_content(html_content, wait_until="networkidle")
+        
+        # Gerar PDF
+        pdf_bytes = await page.pdf(
+            format="A4",
+            landscape=True,
+            print_background=True,
+            margin={"top": "10mm", "right": "10mm", "bottom": "10mm", "left": "10mm"}
+        )
+        
+        # Gerar Imagem PNG
+        image_bytes = await page.screenshot(full_page=True, type="png")
+        
+        await browser.close()
+        return pdf_bytes, image_bytes
 
-        for a in anotacoes:
-            texto = a.get('text', '')
-            tags = a.get('tags', [])
-            
-            is_intermitente = '[INTERMITENTE]' in texto.upper()
-            is_done = '[CONCLUIDO]' in texto.upper() or '[CONCLUÍDO]' in texto.upper()
-            
-            status_txt = 'Intermitente' if is_intermitente else ('Concluído' if is_done else 'Em Andamento')
-            badge_class = 'badge-intermitente' if is_intermitente else ('badge-concluido' if is_done else 'badge-andamento')
+@app.route("/gerar-relatorios", methods=["POST"])
+async def processar_dados():
+    try:
+        payload = request.get_json(force=True)
+        dados_brutos = payload.get("dados", [])
+        
+        if not dados_brutos:
+            return jsonify({"error": "Nenhum dado recebido"}), 400
 
-            regiao = extrair_regiao(texto, tags)
+        df = pd.DataFrame(dados_brutos)
+        
+        # Normalização dos campos
+        for col in df.columns:
+            df[col] = df[col].apply(limpar_texto)
 
-            item = {
-                'dataAbertura': datetime.datetime.fromtimestamp(a.get('time', 0)/1000).strftime("%d/%m/%Y %H:%M") if a.get('time') else '',
-                'dataAtualizacao': datetime.datetime.fromtimestamp(a.get('updated', 0)/1000).strftime("%d/%m/%Y %H:%M") if a.get('updated') else '',
-                'dataFechamento': '',
-                'regiao': ", ".join(tags) if tags else 'Geral',
-                'tratando': '[INTERMITENTE] ITOC' if is_intermitente else 'ITOC',
-                'descricao': texto,
-                'noc': '',
-                'vsc': '',
-                'statusTxt': status_txt,
-                'statusBadgeClass': badge_class
-            }
-
-            itens_geral.append(item)
-            if regiao == 'NORTE':
-                itens_norte.append(item)
-            else:
-                itens_sul_sudeste.append(item)
+        # Regiões ativas para relatório
+        regioes = ["NORTE", "SUL", "LESTE", "GERAL"]
+        relatorios_output = []
 
         agora = datetime.datetime.now()
-        data_emissao = agora.strftime("%d/%m/%Y, %H:%M:%S")
-        data_nome = agora.strftime("%d-%m-%Y")
-        periodo_turno = f"{agora.strftime('%d/%m/%Y')} (05:00 às 18:00)"
+        data_hoje = agora.strftime("%d/%m/%Y (05:00 às 18:00)")
+        hora_geracao = agora.strftime("%d/%m/%Y, %H:%M:%S")
 
-        config_relatorios = [
-            {"sufixo": "Norte", "titulo": "RELATÓRIO DE ATENDIMENTOS • CORREDOR NORTE", "itens": itens_norte},
-            {"sufixo": "SulSudeste", "titulo": "RELATÓRIO DE ATENDIMENTOS • CORREDOR SUL/SUDESTE", "itens": itens_sul_sudeste},
-            {"sufixo": "Geral", "titulo": "RELATÓRIO DE ATENDIMENTOS • GERAL", "itens": itens_geral}
-        ]
+        for reg in regioes:
+            # 1. Filtro por Região e Regras de Status
+            if reg == "GERAL":
+                # Relatório GERAL: Somente Concluídos
+                df_reg = df[df["status"].str.lower().str.contains("concluid", na=False)].copy()
+            else:
+                # Demais relatórios: Em Atendimento / Em Andamento e Intermitentes
+                mask_regiao = df["regiao"].str.upper().str.contains(reg, na=False)
+                mask_status = df["status"].str.lower().str.contains("atendimento|andamento|intermitent", na=False)
+                df_reg = df[mask_regiao & mask_status].copy()
 
-        relatorios_gerados = []
+            if df_reg.empty:
+                continue
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            
-            for config in config_relatorios:
-                html_content = gerar_html_relatorio(config["itens"], config["titulo"], periodo_turno, data_emissao)
-                
-                page = browser.new_page(viewport={"width": 1200, "height": 800})
-                page.set_content(html_content)
-                
-                pdf_bytes = page.pdf(format="A4", landscape=True, print_background=True)
-                image_bytes = page.screenshot(full_page=True)
-                page.close()
+            # Contadores para os Cards superiores
+            qtd_concluidos = len(df_reg[df_reg["status"].str.lower().str.contains("concluid", na=False)])
+            qtd_andamento = len(df_reg[df_reg["status"].str.lower().str.contains("atendimento|andamento", na=False)])
+            qtd_intermitentes = len(df_reg[df_reg["status"].str.lower().str.contains("intermitent", na=False)])
 
-                relatorios_gerados.append({
-                    "regiao": config["sufixo"],
-                    "filename": f"Relatorio_GMG_{config['sufixo']}_{data_nome}.pdf",
-                    "image_filename": f"Relatorio_GMG_{config['sufixo']}_{data_nome}.png",
-                    "pdf_base64": base64.b64encode(pdf_bytes).decode('utf-8'),
-                    "image_base64": base64.b64encode(image_bytes).decode('utf-8')
+            # Montagem da lista de itens
+            lista_itens = []
+            for _, row in df_reg.iterrows():
+                lista_itens.append({
+                    "data_abertura": row.get("data_abertura", ""),
+                    "atualizacao": row.get("atualizacao", ""),
+                    "regiao_site": f"{row.get('regiao', '')} - {row.get('site', '')}",
+                    "tratando": row.get("tratando", "ITOC"),
+                    "descricao": row.get("descricao", ""),
+                    "status": row.get("status", "")
                 })
 
-            browser.close()
+            # Renderização do Jinja2
+            template = Template(HTML_TEMPLATE)
+            html_final = template.render(
+                regiao_titulo=f"CORREDOR {reg}" if reg != "GERAL" else "GERAL",
+                data_hoje=data_hoje,
+                hora_geracao=hora_geracao,
+                total_atendimentos=len(lista_itens),
+                qtd_concluidos=qtd_concluidos,
+                qtd_andamento=qtd_andamento,
+                qtd_intermitentes=qtd_intermitentes,
+                itens=lista_itens
+            )
 
-        return jsonify({"relatorios": relatorios_gerados}), 200
+            # Geração do PDF e Imagem
+            pdf_bytes, img_bytes = await render_pdf_and_image(html_final)
+
+            # Codificação Base64
+            pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+            nome_base = f"Relatorio_GMG_{reg}_{agora.strftime('%d-%m-%Y')}"
+
+            relatorios_output.append({
+                "regiao": reg,
+                "filename": f"{nome_base}.pdf",
+                "image_filename": f"{nome_base}.png",
+                "pdf_base64": pdf_b64,
+                "image_base64": img_b64
+            })
+
+        return jsonify({"relatorios": relatorios_output}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
