@@ -1,21 +1,14 @@
-FROM python:3.10-slim
+FROM mcr.microsoft.com/playwright:v1.40.0-focal
 
-# Instala dependências do sistema necessárias para o Playwright/Chromium
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
-    && rm -rf /var/lib/apt-lists/*
+WORKDIR /usr/src/app
 
-WORKDIR /app
+# Copia arquivos do projeto e instala pacotes
+COPY package*.json ./
+RUN npm install
 
-# Instala as bibliotecas Python
-RUN pip install --no-cache-dir flask gunicorn playwright
+# Copia o restante do código
+COPY . .
 
-# Instala o navegador Chromium para renderizar o PDF
-RUN playwright install --with-deps chromium
+EXPOSE 5000
 
-COPY . /app
-
-EXPOSE 8080
-
-CMD ["gunicorn", "-b", "0.0.0.0:8080", "app:app"]
+CMD ["node", "server.js"]
