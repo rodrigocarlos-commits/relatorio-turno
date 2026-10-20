@@ -4,6 +4,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "build": "npx playwright install chromium",
+    "render-build": "npx playwright install chromium",
     "postinstall": "npx playwright install chromium"
   },
   "dependencies": {
