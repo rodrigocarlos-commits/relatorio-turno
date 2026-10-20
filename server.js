@@ -51,17 +51,17 @@ function obterIntervaloTurno() {
   let inicio = new Date(agora);
   let fim = new Date(agora);
 
-  if (hora >= 5 && hora < 18) {
-    inicio.setHours(5, 0, 0, 0);
+  if (hora >= 6 && hora < 18) {
+    inicio.setHours(6, 0, 0, 0);
     fim.setHours(18, 0, 0, 0);
   } else {
     if (hora >= 18) {
-      inicio.setHours(17, 0, 0, 0);
+      inicio.setHours(18, 0, 0, 0);
       fim.setDate(fim.getDate() + 1);
       fim.setHours(6, 0, 0, 0);
     } else {
       inicio.setDate(inicio.getDate() - 1);
-      inicio.setHours(17, 0, 0, 0);
+      inicio.setHours(18, 0, 0, 0);
       fim.setHours(6, 0, 0, 0);
     }
   }
