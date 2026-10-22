@@ -2,7 +2,6 @@ const express = require('express');
 const playwright = require('playwright');
 const app = express();
 
-// Limite de payload aumentado para aceitar corpos grandes do JSON do Power Automate
 app.use(express.json({ limit: '50mb' }));
 
 // --- DICIONÁRIO DE REGIÕES E CORREDORES ---
@@ -234,7 +233,7 @@ async function renderizarPdfEImagem(html) {
     };
   } catch (err) {
     if (browser) await browser.close().catch(() => {});
-    throw new Error(`Falha ao renderizar PDF/Imagem no Playwright: ${err.message}`);
+    throw new Error(`Falha no Playwright: ${err.message}`);
   }
 }
 
@@ -242,7 +241,7 @@ app.post('/gerar-relatorios', async (req, res) => {
   try {
     const payload = req.body || {};
 
-    // PROTEÇÃO TOTAL DO PAYLOAD
+    // PROTEÇÃO CONTRA ELEMENTOS AUSENTES NO JSON
     let anotacoes = [];
     if (Array.isArray(payload.anotacoes)) {
       anotacoes = payload.anotacoes;
@@ -252,6 +251,7 @@ app.post('/gerar-relatorios', async (req, res) => {
       anotacoes = payload;
     }
 
+    // Se alertas_ativos não for enviado, usa um array vazio [] sem quebrar o código
     const alertasAtivos = Array.isArray(payload.alertas_ativos) ? payload.alertas_ativos : [];
 
     const uidsAtivos = new Set();
