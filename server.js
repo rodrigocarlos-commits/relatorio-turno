@@ -2,7 +2,6 @@ const express = require('express');
 const playwright = require('playwright');
 const app = express();
 
-// Aumenta o limite para aceitar payloads grandes de JSON
 app.use(express.json({ limit: '50mb' }));
 
 // --- DICIONÁRIO DE REGIÕES E CORREDORES ---
@@ -133,26 +132,20 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
         @page { size: A4 landscape; margin: 8mm; }
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
         body { background: #fff; color: #333; margin: 0; padding: 10px; font-size: 11px; }
-
         .header-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
         .sub-title { color: #8c9ba5; font-size: 11px; font-weight: bold; margin: 0; }
         .main-title { color: #1e293b; font-size: 18px; font-weight: 800; margin: 2px 0; text-transform: uppercase; }
         .meta-info { color: #64748b; font-size: 11px; font-weight: 600; margin-top: 2px; }
-
         .tag-gerado { background: #fff8f0; border: 1px solid #ffedd5; color: #d97706; padding: 4px 10px; border-radius: 6px; font-size: 10px; font-weight: bold; text-align: right; }
-
         .kpi-container { display: flex; align-items: center; gap: 15px; background: #f8fafc; padding: 10px 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #e2e8f0; }
         .big-number { font-size: 28px; font-weight: 800; color: #0f172a; line-height: 1; }
         .big-label { font-size: 10px; color: #64748b; font-weight: 600; display: block; margin-top: 2px; }
-
         .kpi-bars { display: flex; gap: 12px; flex: 1; align-items: center; border-left: 2px solid #e2e8f0; padding-left: 15px; }
         .kpi-item { font-size: 11px; font-weight: bold; color: #475569; display: flex; align-items: center; gap: 4px; }
-
         table { width: 100%; border-collapse: collapse; margin-top: 5px; }
         tr { page-break-inside: avoid; }
         th { text-align: left; padding: 6px 5px; border-bottom: 2px solid #e2e8f0; color: #64748b; font-size: 10px; font-weight: 700; text-transform: uppercase; background: #f8fafc; }
         td { padding: 6px 5px; border-bottom: 1px solid #f1f5f9; font-size: 10px; color: #334155; vertical-align: top; word-wrap: break-word; }
-
         .badge { padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; display: inline-block; white-space: nowrap; text-align: center; }
         .badge-concluido { background: #dcfce7; color: #15803d; }
         .badge-andamento { background: #fef3c7; color: #b45309; }
@@ -211,7 +204,6 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
   `;
 }
 
-// OTIMIZAÇÃO DO CHROMIUM: Flag de performance para Linux sem GUI (Render)
 async function renderizarPdfEImagem(html) {
   const browser = await playwright.chromium.launch({
     headless: true,
@@ -241,7 +233,7 @@ app.post('/gerar-relatorios', async (req, res) => {
   try {
     const payload = req.body || {};
 
-    // TRATAMENTO SEGURO: Evita Erro 500 caso anotacoes ou alertas_ativos não venham no JSON
+    // PROTEÇÃO CONTRA PAYLOAD PARCIAL
     let anotacoes = [];
     if (Array.isArray(payload.anotacoes)) {
       anotacoes = payload.anotacoes;
@@ -273,7 +265,6 @@ app.post('/gerar-relatorios', async (req, res) => {
       const tagAlerta = tags.find(t => String(t).startsWith('alerta:'));
       const ruleUid = tagAlerta ? String(tagAlerta).replace('alerta:', '') : null;
 
-      // DETEÇÃO RIGOROSA DO STATUS CONCLUÍDO
       let ehConcluido = textoRaw.toUpperCase().includes('[CONCLUIDO]') || textoRaw.toUpperCase().includes('[CONCLUÍDO]');
       if (uidsAtivos.size > 0 && ruleUid && !uidsAtivos.has(ruleUid)) {
         ehConcluido = true;
@@ -315,7 +306,6 @@ app.post('/gerar-relatorios', async (req, res) => {
       });
     });
 
-    // FILTRAGEM ESTRITA DA REGRA V4.0
     const itensNorte = todosItens.filter(i => i.corredor === 'Corredor Norte' && !i.ehConcluido);
     const itensSul = todosItens.filter(i => i.corredor === 'Corredor Sul e Sudeste' && !i.ehConcluido);
     const itensGeral = todosItens.filter(i => i.ehConcluido);
@@ -353,7 +343,7 @@ app.post('/gerar-relatorios', async (req, res) => {
 
     return res.status(200).json({ relatorios: relatoriosOutput });
   } catch (e) {
-    console.error("Erro ao processar relatório:", e);
+    console.error("Erro no processamento:", e);
     return res.status(500).json({ error: e.message });
   }
 });
