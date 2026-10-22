@@ -2,6 +2,7 @@ const express = require('express');
 const playwright = require('playwright');
 const app = express();
 
+// Aumenta o limite para aceitar payloads grandes de JSON
 app.use(express.json({ limit: '50mb' }));
 
 // --- DICIONÁRIO DE REGIÕES E CORREDORES ---
@@ -81,7 +82,7 @@ function limparEExtrairDescricao(textoBruto) {
     .replace(/C sá/g, 'Cls')
     .replace(/C-/g, 'Ch-')
     .replace(/^\[AGUARDANDO\s*-\s*\d+\]\s*/gi, '')
-    .replace(/^\[(ATENDIMENTO\vert{}PROGRAMADO\vert{}INTERMITENTE\vert{}CONCLUIDO\vert{}CONCLUÍDO)\]\s*/gi, '');
+    .replace(/^\[(ATENDIMENTO|PROGRAMADO|INTERMITENTE|CONCLUIDO|CONCLUÍDO)\]\s*/gi, '');
 
   let tratando = 'ITOC';
   const matchTrat = texto.match(/^(.*?)\s+está tratando/i);
@@ -210,10 +211,15 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
   `;
 }
 
+// OTIMIZAÇÃO DO CHROMIUM: Flag de performance para Linux sem GUI (Render)
 async function renderizarPdfEImagem(html) {
-  const browser = await playwright.chromium.launch({ headless: true });
+  const browser = await playwright.chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+  });
+  
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  await page.setContent(html, { waitUntil: 'networkidle' });
+  await page.setContent(html, { waitUntil: 'domcontentloaded' });
 
   const pdfBuffer = await page.pdf({
     format: 'A4',
@@ -234,13 +240,24 @@ async function renderizarPdfEImagem(html) {
 app.post('/gerar-relatorios', async (req, res) => {
   try {
     const payload = req.body || {};
-    const anotacoes = payload.anotacoes || payload.dados || [];
-    const alertasAtivos = payload.alertas_ativos || [];
+
+    // TRATAMENTO SEGURO: Evita Erro 500 caso anotacoes ou alertas_ativos não venham no JSON
+    let anotacoes = [];
+    if (Array.isArray(payload.anotacoes)) {
+      anotacoes = payload.anotacoes;
+    } else if (Array.isArray(payload.dados)) {
+      anotacoes = payload.dados;
+    } else if (Array.isArray(payload)) {
+      anotacoes = payload;
+    }
+
+    const alertasAtivos = Array.isArray(payload.alertas_ativos) ? payload.alertas_ativos : [];
 
     const uidsAtivos = new Set();
     alertasAtivos.forEach(al => {
-      const uid = al.labels && al.labels.__alert_rule_uid__;
-      if (uid) uidsAtivos.add(uid);
+      if (al && al.labels && al.labels.__alert_rule_uid__) {
+        uidsAtivos.add(al.labels.__alert_rule_uid__);
+      }
     });
 
     const turno = obterIntervaloTurno();
@@ -249,8 +266,10 @@ app.post('/gerar-relatorios', async (req, res) => {
     const todosItens = [];
 
     anotacoes.forEach(an => {
+      if (!an) return;
+      
       const textoRaw = String(an.text || '');
-      const tags = an.tags || [];
+      const tags = Array.isArray(an.tags) ? an.tags : [];
       const tagAlerta = tags.find(t => String(t).startsWith('alerta:'));
       const ruleUid = tagAlerta ? String(tagAlerta).replace('alerta:', '') : null;
 
@@ -334,9 +353,10 @@ app.post('/gerar-relatorios', async (req, res) => {
 
     return res.status(200).json({ relatorios: relatoriosOutput });
   } catch (e) {
+    console.error("Erro ao processar relatório:", e);
     return res.status(500).json({ error: e.message });
   }
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Servidor a rodar na porta ${PORT}`));
