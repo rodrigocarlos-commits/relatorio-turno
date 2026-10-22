@@ -2,6 +2,7 @@ const express = require('express');
 const playwright = require('playwright');
 const app = express();
 
+// Limite de payload aumentado para aceitar corpos grandes do JSON do Power Automate
 app.use(express.json({ limit: '50mb' }));
 
 // --- DICIONÁRIO DE REGIÕES E CORREDORES ---
@@ -24,7 +25,9 @@ const REGIOES_MAPA = {
 };
 
 function extrairRegiaoECorredor(anotacao) {
-  const tags = (anotacao.tags || []).map(t => String(t).toUpperCase());
+  if (!anotacao) return { nome: 'GERAL', corredor: 'Corredor Norte' };
+  
+  const tags = (Array.isArray(anotacao.tags) ? anotacao.tags : []).map(t => String(t).toUpperCase());
   const texto = String(anotacao.text || '').toUpperCase();
   const buscaTotal = `${tags.join(' ')} ${texto}`;
 
@@ -100,20 +103,20 @@ function limparEExtrairDescricao(textoBruto) {
 
 function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
   let linhasHtml = '';
-  if (itens.length === 0) {
+  if (!itens || itens.length === 0) {
     linhasHtml = '<tr><td colspan="9" style="text-align:center; padding: 20px; color: #94a3b8;">Nenhum atendimento nesta categoria para o turno atual.</td></tr>';
   } else {
     itens.forEach(item => {
       linhasHtml += `
         <tr>
-          <td style="white-space: nowrap;">${item.dataAbertura}</td>
-          <td style="white-space: nowrap;">${item.dataAtualizacao}</td>
-          <td style="white-space: nowrap;">${item.dataFechamento}</td>
-          <td><b>${item.regiao}</b></td>
-          <td>${item.tratando}</td>
-          <td>${item.descricao}</td>
-          <td>${item.noc}</td>
-          <td>${item.vsc}</td>
+          <td style="white-space: nowrap;">${item.dataAbertura || ''}</td>
+          <td style="white-space: nowrap;">${item.dataAtualizacao || ''}</td>
+          <td style="white-space: nowrap;">${item.dataFechamento || ''}</td>
+          <td><b>${item.regiao || ''}</b></td>
+          <td>${item.tratando || ''}</td>
+          <td>${item.descricao || ''}</td>
+          <td>${item.noc || ''}</td>
+          <td>${item.vsc || ''}</td>
           <td style="text-align: center;">
             <span class="badge ${item.badgeClass}">${item.statusTxt}</span>
           </td>
@@ -169,7 +172,7 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
 
         <div class="kpi-container">
           <div>
-            <div class="big-number">${itens.length}</div>
+            <div class="big-number">${itens ? itens.length : 0}</div>
             <span class="big-label">atendimentos neste relatório</span>
           </div>
           <div class="kpi-bars">
@@ -205,35 +208,41 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
 }
 
 async function renderizarPdfEImagem(html) {
-  const browser = await playwright.chromium.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-  });
-  
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  await page.setContent(html, { waitUntil: 'domcontentloaded' });
+  let browser = null;
+  try {
+    browser = await playwright.chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+    
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-  const pdfBuffer = await page.pdf({
-    format: 'A4',
-    landscape: true,
-    printBackground: true,
-    margin: { top: '8mm', right: '8mm', bottom: '8mm', left: '8mm' }
-  });
+    const pdfBuffer = await page.pdf({
+      format: 'A4',
+      landscape: true,
+      printBackground: true,
+      margin: { top: '8mm', right: '8mm', bottom: '8mm', left: '8mm' }
+    });
 
-  const imgBuffer = await page.screenshot({ fullPage: true, type: 'png' });
-  await browser.close();
+    const imgBuffer = await page.screenshot({ fullPage: true, type: 'png' });
+    await browser.close();
 
-  return {
-    pdfBase64: pdfBuffer.toString('base64'),
-    imgBase64: imgBuffer.toString('base64')
-  };
+    return {
+      pdfBase64: pdfBuffer.toString('base64'),
+      imgBase64: imgBuffer.toString('base64')
+    };
+  } catch (err) {
+    if (browser) await browser.close().catch(() => {});
+    throw new Error(`Falha ao renderizar PDF/Imagem no Playwright: ${err.message}`);
+  }
 }
 
 app.post('/gerar-relatorios', async (req, res) => {
   try {
     const payload = req.body || {};
 
-    // PROTEÇÃO CONTRA PAYLOAD PARCIAL
+    // PROTEÇÃO TOTAL DO PAYLOAD
     let anotacoes = [];
     if (Array.isArray(payload.anotacoes)) {
       anotacoes = payload.anotacoes;
