@@ -274,7 +274,18 @@ app.post('/gerar-relatorios', async (req, res) => {
       const tagAlerta = tags.find(t => String(t).startsWith('alerta:'));
       const ruleUid = tagAlerta ? String(tagAlerta).replace('alerta:', '') : null;
 
-      let ehConcluido = textoRaw.toUpperCase().includes('[CONCLUIDO]') || textoRaw.toUpperCase().includes('[CONCLUÍDO]');
+      // Detecta conclusão tanto no texto quanto nas tags, com ou sem acento.
+      // Isso evita que registros concluídos com variações de escrita fiquem fora do GERAL.
+      const textoStatus = `${textoRaw} ${tags.map(t => String(t)).join(' ')}`
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase();
+
+      let ehConcluido = /\[\s*CONCLUID[OA]S?\s*\]/.test(textoStatus)
+        || /\bSTATUS\s*[:=]\s*CONCLUID[OA]S?\b/.test(textoStatus);
+
+      // Mantém a regra existente: se a regra vinculada deixou de estar ativa,
+      // a anotação é considerada concluída quando há lista de alertas ativos disponível.
       if (uidsAtivos.size > 0 && ruleUid && !uidsAtivos.has(ruleUid)) {
         ehConcluido = true;
       }
@@ -315,6 +326,8 @@ app.post('/gerar-relatorios', async (req, res) => {
       });
     });
 
+    // Concluídos aparecem exclusivamente no relatório GERAL.
+    // Os relatórios Norte e Sul/Sudeste recebem somente atendimentos não concluídos.
     const itensNorte = todosItens.filter(i => i.corredor === 'Corredor Norte' && !i.ehConcluido);
     const itensSul = todosItens.filter(i => i.corredor === 'Corredor Sul e Sudeste' && !i.ehConcluido);
     const itensGeral = todosItens.filter(i => i.ehConcluido);
