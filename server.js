@@ -339,7 +339,7 @@ app.post('/gerar-relatorios', async (req, res) => {
       const { pdfBase64, imgBase64 } = await renderizarPdfEImagem(html);
 
       const dataHoje = new Date().toISOString().split('T')[0];
-      const nomeBase = `Relatorio_GMG_${cat.chave}_${dataHoje}`;
+      const nomeBase = `Relatorio_${cat.chave}_${dataHoje}`;
 
       relatoriosOutput.push({
         regiao: cat.chave,
