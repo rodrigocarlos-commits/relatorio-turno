@@ -74,20 +74,48 @@ function obterIntervaloTurno() {
   };
 }
 
+function formatarTimestampConclusao(texto) {
+  return String(texto || '').replace(
+    /(CONCLU[IÍ]DO[_\s]+EM\s*:\s*)(\d{13}|\d{10})\b/gi,
+    (trecho, rotulo, valor) => {
+      const numero = Number(valor);
+      const data = new Date(valor.length === 10 ? numero * 1000 : numero);
+      if (Number.isNaN(data.getTime())) return trecho;
+      const formatada = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+      }).format(data);
+      return `${rotulo.replace(/[_\s]+/g, ' ').trim()} ${formatada}`;
+    }
+  );
+}
+
 function limparEExtrairDescricao(textoBruto) {
   if (!textoBruto) return { tratando: 'ITOC', descricao: '', noc: '' };
 
-  let texto = String(textoBruto)
-    .replace(/[\x00-\x1F\x7F-\x9F]/g, '')
+  const textoOriginal = String(textoBruto).replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+  const matchConclusao = textoOriginal.match(/CONCLU[IÍ]DO[_\s]+EM\s*:\s*(\d{13}|\d{10})\b/i);
+  const textoComData = formatarTimestampConclusao(textoOriginal);
+
+  let texto = textoComData
     .replace(/\[\s*\]/g, '')
     .replace(/C sá/g, 'Cls')
-    .replace(/C-/g, 'Ch-')
     .replace(/^\[AGUARDANDO\s*-\s*\d+\]\s*/gi, '')
     .replace(/^\[(ATENDIMENTO|PROGRAMADO|INTERMITENTE|CONCLUIDO|CONCLUÍDO)\]\s*/gi, '');
 
   let tratando = 'ITOC';
   const matchTrat = texto.match(/^(.*?)\s+está tratando/i);
-  if (matchTrat) tratando = matchTrat[1].trim();
+  if (matchTrat) {
+    tratando = matchTrat[1].trim();
+  } else if (matchConclusao) {
+    const restante = texto.replace(/.*?CONCLU[IÍ]DO[_\s]+EM\s*:\s*\d{13}|.*?CONCLU[IÍ]DO[_\s]+EM\s*:\s*\d{10}/i, '')
+      .replace(/\[\s*CONCLU[IÍ]DO\s*\]/gi, '')
+      .trim();
+    const dataConclusao = texto.match(/CONCLU[IÍ]DO[_\s]+EM\s*:\s*\d{2}\/\d{2}\/\d{4}[^\]]*/i);
+    const dataTexto = dataConclusao ? dataConclusao[0].replace(/_/g, ' ') : '';
+    tratando = [dataTexto, restante].filter(Boolean).join(' — ').trim();
+  }
 
   let descricao = texto;
   const matchDesc = texto.match(/"([^"]+)"/);
@@ -95,7 +123,7 @@ function limparEExtrairDescricao(textoBruto) {
 
   let noc = '';
   const matchNoc = texto.match(/\(chamado nº\s*([^)]+)\)/i);
-  if (matchNoc) noc = matchNoc[1].trim();
+  if (matchNoc) noc = matchNoc[1].trim().replace(/\bINCh-/gi, 'INC-');
 
   return { tratando, descricao, noc };
 }
