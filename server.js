@@ -11,9 +11,16 @@ const REGIOES_MAPA = {
   'CARAJÁS': { nome: 'CARAJÁS', corredor: 'Corredor Norte' },
   'PALMARES': { nome: 'CARAJÁS', corredor: 'Corredor Norte' },
   'BOCAINA': { nome: 'CARAJÁS', corredor: 'Corredor Norte' },
+  'N4EEN': { nome: 'CARAJÁS', corredor: 'Corredor Norte' },
+  'TORRE SUL': { nome: 'CARAJÁS', corredor: 'Corredor Norte' },
   'SALOBO': { nome: 'SALOBO', corredor: 'Corredor Norte' },
   'CORTE 7': { nome: 'SALOBO', corredor: 'Corredor Norte' },
   'S11D': { nome: 'S11D', corredor: 'Corredor Norte' },
+  'OFICINA MINA': { nome: 'S11D', corredor: 'Corredor Norte' },
+  'OVERLAND': { nome: 'S11D', corredor: 'Corredor Norte' },
+  'MINA S16': { nome: 'S11D', corredor: 'Corredor Norte' },
+  'TORRE 140': { nome: 'S11D', corredor: 'Corredor Norte' },
+  'MIRANTE': { nome: 'S11D', corredor: 'Corredor Norte' },
   'SLZ': { nome: 'SÃO LUÍS', corredor: 'Corredor Norte' },
   'SAO LUIZ': { nome: 'SÃO LUÍS', corredor: 'Corredor Norte' },
   'SÃO LUIZ': { nome: 'SÃO LUÍS', corredor: 'Corredor Norte' },
@@ -34,6 +41,7 @@ const REGIOES_MAPA = {
   'SERRA GERAL': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
   'JOAO PEREIRA': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
   'SAO GONCALO': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
+  'CAVA CPX': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
   'GALINHEIRO': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
   'VIX': { nome: 'ES', corredor: 'Corredor Sul e Sudeste' },
   'ES': { nome: 'ES', corredor: 'Corredor Sul e Sudeste' },
@@ -71,16 +79,15 @@ function extrairRegiaoECorredor(anotacao, descricaoLimpa = '') {
   return { nome: 'GERAL', corredor: 'Corredor Norte' };
 }
 
-// Extrai o nome limpo do Site para agrupar todos os alarmes do mesmo site em uma única linha
+// Extrai o nome limpo do Site para agrupar todos os alarmes do mesmo site
 function extrairNomeSite(descricao) {
   if (!descricao) return '';
   let limpo = normalizarTexto(descricao)
-    .replace(/\b(ALARME|ALERTA|ENLACE|RSSI|SATELITES|SATELITE|NODE|BSC\s*\d*|PRINCIPAL|REDUNDANTE|POTENCIA|REFLETIDA|TENSAO|BATERIA|DC|CHUMBO|CONECTIVIDADE|INTERNET|WAN|DIFL|LATENCIA|CAPACIDADE|TANQ|GMG|ACIONADO|COM|AC|NORMAL|BANCO|BATERIAS|PDE|M\.\s*AUT|MINA\s*AUT|L[0-4]|C[0-4]|TR\d+)\b/g, ' ')
+    .replace(/\b(ALARME|ALERTA|ENLACE|ENLACES|MICROONDAS|PTP|CONEC|RSSI|SATELITES|SATELITE|NODE|BSC\s*\d*|PRINCIPAL|REDUNDANTE|POTENCIA|REFLETIDA|TENSAO|BATERIA|DC|CHUMBO|CONECTIVIDADE|INTERNET|WAN|DIFL|LATENCIA|CAPACIDADE|TANQ|GMG|ACIONADO|COM|AC|NORMAL|ATENDIMENTO|ALDAK|VALE|ATIVO|FASES|REDE|BANCO|BATERIAS|PDE|M\.\s*AUT|MINA\s*AUT|L[0-4]|C[0-4]|TR\d+)\b/g, ' ')
     .replace(/[-–—/()]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Normaliza abreviações conhecidas de sites
   if (limpo.includes('BRUCU')) limpo = 'BRUCUTU';
 
   return limpo.length >= 3 ? limpo : '';
@@ -225,7 +232,7 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
         td { padding: 6px 5px; border-bottom: 1px solid #f1f5f9; font-size: 10px; color: #334155; vertical-align: top; word-wrap: break-word; }
         .alarme-bloco { margin-bottom: 5px; }
         .alarme-bloco:last-child { margin-bottom: 0; }
-        .historico-datas { font-size: 9px; color: #64748b; line-height: 1.35; margin-left: 6px; }
+        .historico-datas { font-size: 9px; color: #64748b; line-height: 1.35; margin-left: 8px; }
         .badge { padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; display: inline-block; white-space: nowrap; text-align: center; }
         .badge-concluido { background: #dcfce7; color: #15803d; }
         .badge-andamento { background: #fef3c7; color: #b45309; }
@@ -250,7 +257,7 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
         <div class="kpi-container">
           <div>
             <div class="big-number">${itens ? itens.length : 0}</div>
-            <span class="big-label">sites/atendimentos ativos</span>
+            <span class="big-label">sites/atendimentos neste relatório</span>
           </div>
           <div class="kpi-bars">
             <div class="kpi-item">🟡 <b>${kpi.andamento}</b> Em Andamento</div>
@@ -329,7 +336,6 @@ app.post('/gerar-relatorios', async (req, res) => {
 
     const alertasAtivos = Array.isArray(payload.alertas_ativos) ? payload.alertas_ativos : [];
 
-    // Mapeia UID -> Nome Real e Dados do Alarme Ativo no Grafana
     const uidsAtivos = new Set();
     const mapaNomesReaisPorUid = new Map();
     const uidsPresentesNasAnotacoes = new Set();
@@ -346,8 +352,8 @@ app.post('/gerar-relatorios', async (req, res) => {
       }
     });
 
-    // Mapa para concentrar TUDO DO MESMO SITE em uma única linha
-    const gruposPorSite = new Map();
+    // Mapa para concentrar alarmes do MESMO SITE e com o MESMO NOC em uma única linha
+    const gruposPorSiteENoc = new Map();
 
     function registrarOcorrenciaNoGrupo({
       regInfo,
@@ -364,30 +370,30 @@ app.post('/gerar-relatorios', async (req, res) => {
         ? `${regInfo.nome} • ${nomeSite}`
         : regInfo.nome;
 
-      // Chave única por SITE (ex: "Corredor Sul e Sudeste::MG::JOAO PEREIRA")
-      // Se não tiver site identificado, usa o nome do alarme para não misturar sites desconhecidos
-      const chaveSite = nomeSite
-        ? `${regInfo.corredor}::${regInfo.nome}::${nomeSite}`
-        : `${regInfo.corredor}::${regInfo.nome}::${normalizarTexto(nomeAlarme)}`;
+      const nocNormalizado = normalizarTexto(noc || '').replace(/\s+/g, ' ').trim();
 
-      if (!gruposPorSite.has(chaveSite)) {
-        gruposPorSite.set(chaveSite, {
+      // Concentra na mesma linha se for o MESMO SITE e tiver a MESMA INFORMAÇÃO NA COLUNA NOC
+      const chaveGrupo = nomeSite
+        ? `${regInfo.corredor}::${regInfo.nome}::${nomeSite}::${nocNormalizado}`
+        : `${regInfo.corredor}::${regInfo.nome}::${normalizarTexto(nomeAlarme)}::${nocNormalizado}`;
+
+      if (!gruposPorSiteENoc.has(chaveGrupo)) {
+        gruposPorSiteENoc.set(chaveGrupo, {
           minAbertura: tsAbertura,
           maxAtualizacao: tsAtualizacao,
           regiao: regInfo.nome,
           regiaoSite,
           corredor: regInfo.corredor,
           tratando: tratando || 'ITOC',
-          nocSet: new Set(noc ? [noc] : []),
+          noc: (noc || '').trim(),
           vsc: '',
           statusTxt,
           badgeClass,
-          // Sub-mapa para organizar cada alarme distinto dentro do mesmo site
           alarmesDoSite: new Map()
         });
       }
 
-      const grupo = gruposPorSite.get(chaveSite);
+      const grupo = gruposPorSiteENoc.get(chaveGrupo);
 
       if (tsAbertura && (!grupo.minAbertura || tsAbertura < grupo.minAbertura)) {
         grupo.minAbertura = tsAbertura;
@@ -395,8 +401,6 @@ app.post('/gerar-relatorios', async (req, res) => {
       if (tsAtualizacao && tsAtualizacao > grupo.maxAtualizacao) {
         grupo.maxAtualizacao = tsAtualizacao;
       }
-
-      if (noc) grupo.nocSet.add(noc);
 
       if (statusTxt === 'Em Andamento') {
         grupo.statusTxt = 'Em Andamento';
@@ -424,7 +428,7 @@ app.post('/gerar-relatorios', async (req, res) => {
       });
     }
 
-    // 1. Processa todas as anotações retornadas
+    // 1. Processa as anotações retornadas
     anotacoes.forEach(an => {
       if (!an) return;
 
@@ -481,13 +485,12 @@ app.post('/gerar-relatorios', async (req, res) => {
       });
     });
 
-    // 2. Resgata alarmes antigos que estão ATIVOS na tela mas ficaram fora do limite de busca de anotações do Grafana
+    // 2. Resgata alarmes antigos ativos caso não tenham vindo nas anotações
     alertasAtivos.forEach(al => {
       if (!al || !al.labels) return;
       const uid = al.labels.__alert_rule_uid__;
       if (!uid || uidsPresentesNasAnotacoes.has(uid)) return;
 
-      // Só inclui se o alerta ativo tiver indicação de tratamento ou estiver disparando (firing)
       const estado = String(al.state || al.status?.state || '').toLowerCase();
       if (estado && estado !== 'alerting' && estado !== 'firing') return;
 
@@ -511,8 +514,8 @@ app.post('/gerar-relatorios', async (req, res) => {
       });
     });
 
-    // Monta a tabela final consolidada por Site
-    const todosItens = Array.from(gruposPorSite.values()).map(g => {
+    // Monta as linhas consolidadas
+    const todosItens = Array.from(gruposPorSiteENoc.values()).map(g => {
       const blocosAlarmesHtml = [];
 
       g.alarmesDoSite.forEach(alInfo => {
@@ -550,7 +553,7 @@ app.post('/gerar-relatorios', async (req, res) => {
         tratando: g.tratando,
         descricao: Array.from(g.alarmesDoSite.keys()).join(', '),
         descricaoHtml: blocosAlarmesHtml.join(''),
-        noc: Array.from(g.nocSet).join(' / '),
+        noc: g.noc,
         vsc: g.vsc,
         statusTxt: g.statusTxt,
         badgeClass: g.badgeClass
