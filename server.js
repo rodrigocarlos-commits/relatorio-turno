@@ -34,6 +34,7 @@ const REGIOES_MAPA = {
   'SERRA GERAL': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
   'JOAO PEREIRA': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
   'SAO GONCALO': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
+  'GALINHEIRO': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
   'VIX': { nome: 'ES', corredor: 'Corredor Sul e Sudeste' },
   'ES': { nome: 'ES', corredor: 'Corredor Sul e Sudeste' },
   'RJ': { nome: 'VALE RJ', corredor: 'Corredor Sul e Sudeste' },
@@ -50,19 +51,15 @@ function normalizarTexto(str) {
 }
 
 function extrairRegiaoECorredor(anotacao, descricaoLimpa = '') {
-  if (!anotacao) return { nome: 'GERAL', corredor: 'Corredor Norte' };
+  const tags = (Array.isArray(anotacao?.tags) ? anotacao.tags : []).map(t => normalizarTexto(t));
+  const texto = normalizarTexto(`${anotacao?.text || ''} ${descricaoLimpa}`);
 
-  const tags = (Array.isArray(anotacao.tags) ? anotacao.tags : []).map(t => normalizarTexto(t));
-  const texto = normalizarTexto(`${anotacao.text || ''} ${descricaoLimpa}`);
-
-  // 1. Prioridade para tags exatas
   for (const tag of tags) {
     if (REGIOES_MAPA[tag]) {
       return REGIOES_MAPA[tag];
     }
   }
 
-  // 2. Busca palavras-chave/sites dentro do texto do alarme
   for (const [chave, info] of Object.entries(REGIOES_MAPA)) {
     const chaveNorm = normalizarTexto(chave);
     const regex = new RegExp(`\\b${chaveNorm}\\b`, 'i');
@@ -74,13 +71,17 @@ function extrairRegiaoECorredor(anotacao, descricaoLimpa = '') {
   return { nome: 'GERAL', corredor: 'Corredor Norte' };
 }
 
+// Extrai o nome limpo do Site para agrupar todos os alarmes do mesmo site em uma única linha
 function extrairNomeSite(descricao) {
   if (!descricao) return '';
-  let limpo = String(descricao)
-    .replace(/\b(ALARME|ALERTA|ENLACE|RSSI|SATELITES|NODE|BSC\s*\d*|PRINCIPAL|REDUNDANTE|POTENCIA|REFLETIDA|TENSAO|BATERIA|DC|CHUMBO|CONECTIVIDADE|INTERNET|WAN|DIFL|LATENCIA|CAPACIDADE|TANQ|GMG|BANCO|BATERIAS|PDE|M\.\s*AUT|MINA\s*AUT|L[0-4]|C[0-4]|TR\d+)\b/gi, ' ')
-    .replace(/[-–—]/g, ' ')
+  let limpo = normalizarTexto(descricao)
+    .replace(/\b(ALARME|ALERTA|ENLACE|RSSI|SATELITES|SATELITE|NODE|BSC\s*\d*|PRINCIPAL|REDUNDANTE|POTENCIA|REFLETIDA|TENSAO|BATERIA|DC|CHUMBO|CONECTIVIDADE|INTERNET|WAN|DIFL|LATENCIA|CAPACIDADE|TANQ|GMG|ACIONADO|COM|AC|NORMAL|BANCO|BATERIAS|PDE|M\.\s*AUT|MINA\s*AUT|L[0-4]|C[0-4]|TR\d+)\b/g, ' ')
+    .replace(/[-–—/()]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+
+  // Normaliza abreviações conhecidas de sites
+  if (limpo.includes('BRUCU')) limpo = 'BRUCUTU';
 
   return limpo.length >= 3 ? limpo : '';
 }
@@ -222,7 +223,9 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
         tr { page-break-inside: avoid; }
         th { text-align: left; padding: 6px 5px; border-bottom: 2px solid #e2e8f0; color: #64748b; font-size: 10px; font-weight: 700; text-transform: uppercase; background: #f8fafc; }
         td { padding: 6px 5px; border-bottom: 1px solid #f1f5f9; font-size: 10px; color: #334155; vertical-align: top; word-wrap: break-word; }
-        .historico-datas { margin-top: 4px; font-size: 9px; color: #64748b; line-height: 1.35; }
+        .alarme-bloco { margin-bottom: 5px; }
+        .alarme-bloco:last-child { margin-bottom: 0; }
+        .historico-datas { font-size: 9px; color: #64748b; line-height: 1.35; margin-left: 6px; }
         .badge { padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; display: inline-block; white-space: nowrap; text-align: center; }
         .badge-concluido { background: #dcfce7; color: #15803d; }
         .badge-andamento { background: #fef3c7; color: #b45309; }
@@ -247,7 +250,7 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
         <div class="kpi-container">
           <div>
             <div class="big-number">${itens ? itens.length : 0}</div>
-            <span class="big-label">alarmes únicos neste relatório</span>
+            <span class="big-label">sites/atendimentos ativos</span>
           </div>
           <div class="kpi-bars">
             <div class="kpi-item">🟡 <b>${kpi.andamento}</b> Em Andamento</div>
@@ -262,9 +265,9 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
               <th style="width: 95px;">1ª Abertura</th>
               <th style="width: 95px;">Últ. Atualização</th>
               <th style="width: 95px;">Fechamento</th>
-              <th style="width: 120px;">Região / Site</th>
+              <th style="width: 125px;">Região / Site</th>
               <th style="width: 85px;">Tratando</th>
-              <th>Descrição do Atendimento / Histórico</th>
+              <th>Alarmes do Site / Histórico de Registros</th>
               <th style="width: 85px;">NOC</th>
               <th style="width: 40px;">VSC</th>
               <th style="width: 95px; text-align: center;">Status</th>
@@ -326,9 +329,10 @@ app.post('/gerar-relatorios', async (req, res) => {
 
     const alertasAtivos = Array.isArray(payload.alertas_ativos) ? payload.alertas_ativos : [];
 
-    // Mapeia UID -> Nome Real do Alarme Ativo no Grafana
+    // Mapeia UID -> Nome Real e Dados do Alarme Ativo no Grafana
     const uidsAtivos = new Set();
     const mapaNomesReaisPorUid = new Map();
+    const uidsPresentesNasAnotacoes = new Set();
 
     alertasAtivos.forEach(al => {
       if (al && al.labels && al.labels.__alert_rule_uid__) {
@@ -342,11 +346,85 @@ app.post('/gerar-relatorios', async (req, res) => {
       }
     });
 
-    const turno = obterIntervaloTurno();
-    const dataEmissao = new Date().toLocaleString('pt-BR');
+    // Mapa para concentrar TUDO DO MESMO SITE em uma única linha
+    const gruposPorSite = new Map();
 
-    const gruposAlarmes = new Map();
+    function registrarOcorrenciaNoGrupo({
+      regInfo,
+      nomeSite,
+      nomeAlarme,
+      tratando,
+      noc,
+      statusTxt,
+      badgeClass,
+      tsAbertura,
+      tsAtualizacao
+    }) {
+      const regiaoSite = nomeSite && !nomeSite.includes(regInfo.nome)
+        ? `${regInfo.nome} • ${nomeSite}`
+        : regInfo.nome;
 
+      // Chave única por SITE (ex: "Corredor Sul e Sudeste::MG::JOAO PEREIRA")
+      // Se não tiver site identificado, usa o nome do alarme para não misturar sites desconhecidos
+      const chaveSite = nomeSite
+        ? `${regInfo.corredor}::${regInfo.nome}::${nomeSite}`
+        : `${regInfo.corredor}::${regInfo.nome}::${normalizarTexto(nomeAlarme)}`;
+
+      if (!gruposPorSite.has(chaveSite)) {
+        gruposPorSite.set(chaveSite, {
+          minAbertura: tsAbertura,
+          maxAtualizacao: tsAtualizacao,
+          regiao: regInfo.nome,
+          regiaoSite,
+          corredor: regInfo.corredor,
+          tratando: tratando || 'ITOC',
+          nocSet: new Set(noc ? [noc] : []),
+          vsc: '',
+          statusTxt,
+          badgeClass,
+          // Sub-mapa para organizar cada alarme distinto dentro do mesmo site
+          alarmesDoSite: new Map()
+        });
+      }
+
+      const grupo = gruposPorSite.get(chaveSite);
+
+      if (tsAbertura && (!grupo.minAbertura || tsAbertura < grupo.minAbertura)) {
+        grupo.minAbertura = tsAbertura;
+      }
+      if (tsAtualizacao && tsAtualizacao > grupo.maxAtualizacao) {
+        grupo.maxAtualizacao = tsAtualizacao;
+      }
+
+      if (noc) grupo.nocSet.add(noc);
+
+      if (statusTxt === 'Em Andamento') {
+        grupo.statusTxt = 'Em Andamento';
+        grupo.badgeClass = 'badge-andamento';
+      } else if (statusTxt === 'Programado' && grupo.statusTxt === 'Intermitente') {
+        grupo.statusTxt = 'Programado';
+        grupo.badgeClass = 'badge-programado';
+      }
+
+      if (tratando && tratando !== 'ITOC') {
+        grupo.tratando = tratando;
+      }
+
+      const chaveAlarme = normalizarTexto(nomeAlarme);
+      if (!grupo.alarmesDoSite.has(chaveAlarme)) {
+        grupo.alarmesDoSite.set(chaveAlarme, {
+          nomeOriginal: nomeAlarme,
+          registros: []
+        });
+      }
+
+      grupo.alarmesDoSite.get(chaveAlarme).registros.push({
+        abertura: tsAbertura,
+        atualizacao: tsAtualizacao
+      });
+    }
+
+    // 1. Processa todas as anotações retornadas
     anotacoes.forEach(an => {
       if (!an) return;
 
@@ -354,6 +432,8 @@ app.post('/gerar-relatorios', async (req, res) => {
       const tags = Array.isArray(an.tags) ? an.tags : [];
       const tagAlerta = tags.find(t => String(t).startsWith('alerta:'));
       const ruleUid = tagAlerta ? String(tagAlerta).replace('alerta:', '') : null;
+
+      if (ruleUid) uidsPresentesNasAnotacoes.add(ruleUid);
 
       const textoStatus = normalizarTexto(`${textoRaw} ${tags.join(' ')}`);
 
@@ -364,7 +444,6 @@ app.post('/gerar-relatorios', async (req, res) => {
         ehConcluido = true;
       }
 
-      // Ignora concluídos (Relatório Geral removido)
       if (ehConcluido) return;
 
       const ehIntermitente = textoRaw.toUpperCase().includes('[INTERMITENTE]');
@@ -382,86 +461,84 @@ app.post('/gerar-relatorios', async (req, res) => {
       }
 
       const extraido = limparEExtrairDescricao(textoRaw);
-
-      // Usa o nome real do alarme vinculado ao UID (evita agrupamento indevido quando vários alarmes compartilham o mesmo chamado)
       const nomeAlarmeFinal = (ruleUid && mapaNomesReaisPorUid.has(ruleUid))
         ? mapaNomesReaisPorUid.get(ruleUid)
         : extraido.descricao;
 
       const regInfo = extrairRegiaoECorredor(an, nomeAlarmeFinal);
       const nomeSite = extrairNomeSite(nomeAlarmeFinal);
-      const regiaoSite = nomeSite && !nomeSite.includes(regInfo.nome)
-        ? `${regInfo.nome} • ${nomeSite}`
-        : regInfo.nome;
 
-      const tsAbertura = Number(an.time || an.created || 0);
-      const tsAtualizacao = Number(an.updated || tsAbertura || 0);
-
-      const chaveGrupo = `${regInfo.corredor}::${normalizarTexto(nomeAlarmeFinal)}`;
-
-      if (!gruposAlarmes.has(chaveGrupo)) {
-        gruposAlarmes.set(chaveGrupo, {
-          minAbertura: tsAbertura,
-          maxAtualizacao: tsAtualizacao,
-          regiao: regInfo.nome,
-          regiaoSite,
-          corredor: regInfo.corredor,
-          tratando: extraido.tratando,
-          descricao: nomeAlarmeFinal,
-          nocSet: new Set(extraido.noc ? [extraido.noc] : []),
-          vsc: '',
-          statusTxt,
-          badgeClass,
-          registros: []
-        });
-      }
-
-      const grupo = gruposAlarmes.get(chaveGrupo);
-
-      if (tsAbertura && (!grupo.minAbertura || tsAbertura < grupo.minAbertura)) {
-        grupo.minAbertura = tsAbertura;
-      }
-      if (tsAtualizacao && tsAtualizacao > grupo.maxAtualizacao) {
-        grupo.maxAtualizacao = tsAtualizacao;
-      }
-
-      if (extraido.noc) grupo.nocSet.add(extraido.noc);
-
-      if (statusTxt === 'Em Andamento') {
-        grupo.statusTxt = 'Em Andamento';
-        grupo.badgeClass = 'badge-andamento';
-      }
-      if (extraido.tratando && extraido.tratando !== 'ITOC') {
-        grupo.tratando = extraido.tratando;
-      }
-
-      grupo.registros.push({
-        abertura: tsAbertura,
-        atualizacao: tsAtualizacao
+      registrarOcorrenciaNoGrupo({
+        regInfo,
+        nomeSite,
+        nomeAlarme: nomeAlarmeFinal,
+        tratando: extraido.tratando,
+        noc: extraido.noc,
+        statusTxt,
+        badgeClass,
+        tsAbertura: Number(an.time || an.created || 0),
+        tsAtualizacao: Number(an.updated || an.time || an.created || 0)
       });
     });
 
-    const todosItens = Array.from(gruposAlarmes.values()).map(g => {
-      g.registros.sort((a, b) => a.abertura - b.abertura);
-      const datasUnicas = [];
-      const vistos = new Set();
+    // 2. Resgata alarmes antigos que estão ATIVOS na tela mas ficaram fora do limite de busca de anotações do Grafana
+    alertasAtivos.forEach(al => {
+      if (!al || !al.labels) return;
+      const uid = al.labels.__alert_rule_uid__;
+      if (!uid || uidsPresentesNasAnotacoes.has(uid)) return;
 
-      g.registros.forEach(r => {
-        const dtAb = formatarDataHora(r.abertura);
-        const dtAt = formatarDataHora(r.atualizacao);
-        const textoRegistro = dtAt && dtAt !== dtAb ? `${dtAb} (att ${dtAt})` : dtAb;
-        if (textoRegistro && !vistos.has(textoRegistro)) {
-          vistos.add(textoRegistro);
-          datasUnicas.push(textoRegistro);
-        }
+      // Só inclui se o alerta ativo tiver indicação de tratamento ou estiver disparando (firing)
+      const estado = String(al.state || al.status?.state || '').toLowerCase();
+      if (estado && estado !== 'alerting' && estado !== 'firing') return;
+
+      const nomeReal = mapaNomesReaisPorUid.get(uid) || al.labels.alertname || '';
+      if (!nomeReal) return;
+
+      const regInfo = extrairRegiaoECorredor({ tags: Object.values(al.labels || {}), text: nomeReal }, nomeReal);
+      const nomeSite = extrairNomeSite(nomeReal);
+      const tsInicio = al.startsAt ? new Date(al.startsAt).getTime() : Date.now();
+
+      registrarOcorrenciaNoGrupo({
+        regInfo,
+        nomeSite,
+        nomeAlarme: nomeReal,
+        tratando: 'ITOC',
+        noc: '',
+        statusTxt: 'Em Andamento',
+        badgeClass: 'badge-andamento',
+        tsAbertura: tsInicio,
+        tsAtualizacao: Date.now()
       });
+    });
 
-      const descricaoHtml = `
-        <div><b>${g.descricao}</b></div>
-        <div class="historico-datas">
-          <b>Registros (${g.registros.length}x):</b> ${datasUnicas.join(' &bull; ')}
-        </div>
-      `;
+    // Monta a tabela final consolidada por Site
+    const todosItens = Array.from(gruposPorSite.values()).map(g => {
+      const blocosAlarmesHtml = [];
+
+      g.alarmesDoSite.forEach(alInfo => {
+        alInfo.registros.sort((a, b) => a.abertura - b.abertura);
+        const datasUnicas = [];
+        const vistos = new Set();
+
+        alInfo.registros.forEach(r => {
+          const dtAb = formatarDataHora(r.abertura);
+          const dtAt = formatarDataHora(r.atualizacao);
+          const textoRegistro = dtAt && dtAt !== dtAb ? `${dtAb} (att ${dtAt})` : dtAb;
+          if (textoRegistro && !vistos.has(textoRegistro)) {
+            vistos.add(textoRegistro);
+            datasUnicas.push(textoRegistro);
+          }
+        });
+
+        blocosAlarmesHtml.push(`
+          <div class="alarme-bloco">
+            <div><b>• ${alInfo.nomeOriginal}</b></div>
+            <div class="historico-datas">
+              Registros (${alInfo.registros.length}x): ${datasUnicas.join(' &bull; ')}
+            </div>
+          </div>
+        `);
+      });
 
       return {
         dataAbertura: formatarDataHora(g.minAbertura),
@@ -471,8 +548,8 @@ app.post('/gerar-relatorios', async (req, res) => {
         regiaoSite: g.regiaoSite,
         corredor: g.corredor,
         tratando: g.tratando,
-        descricao: g.descricao,
-        descricaoHtml,
+        descricao: Array.from(g.alarmesDoSite.keys()).join(', '),
+        descricaoHtml: blocosAlarmesHtml.join(''),
         noc: Array.from(g.nocSet).join(' / '),
         vsc: g.vsc,
         statusTxt: g.statusTxt,
@@ -480,7 +557,9 @@ app.post('/gerar-relatorios', async (req, res) => {
       };
     });
 
-    // Mantém apenas Norte e Sul/Sudeste
+    const turno = obterIntervaloTurno();
+    const dataEmissao = new Date().toLocaleString('pt-BR');
+
     const itensNorte = todosItens.filter(i => i.corredor === 'Corredor Norte');
     const itensSul = todosItens.filter(i => i.corredor === 'Corredor Sul e Sudeste');
 
