@@ -79,7 +79,6 @@ function extrairRegiaoECorredor(anotacao, descricaoLimpa = '') {
   return { nome: 'GERAL', corredor: 'Corredor Norte' };
 }
 
-// Extrai o nome limpo do Site para agrupar todos os alarmes do mesmo site
 function extrairNomeSite(descricao) {
   if (!descricao) return '';
   let limpo = normalizarTexto(descricao)
@@ -99,6 +98,14 @@ function formatarDataHora(ts) {
   if (isNaN(d.getTime())) return String(ts);
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function obterChaveDia(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function obterIntervaloTurno() {
@@ -274,7 +281,7 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
               <th style="width: 95px;">Fechamento</th>
               <th style="width: 125px;">Região / Site</th>
               <th style="width: 85px;">Tratando</th>
-              <th>Alarmes do Site / Histórico de Registros</th>
+              <th>Alarmes do Site / Último Registro do Dia</th>
               <th style="width: 85px;">NOC</th>
               <th style="width: 40px;">VSC</th>
               <th style="width: 95px; text-align: center;">Status</th>
@@ -352,7 +359,6 @@ app.post('/gerar-relatorios', async (req, res) => {
       }
     });
 
-    // Mapa para concentrar alarmes do MESMO SITE e com o MESMO NOC em uma única linha
     const gruposPorSiteENoc = new Map();
 
     function registrarOcorrenciaNoGrupo({
@@ -372,7 +378,6 @@ app.post('/gerar-relatorios', async (req, res) => {
 
       const nocNormalizado = normalizarTexto(noc || '').replace(/\s+/g, ' ').trim();
 
-      // Concentra na mesma linha se for o MESMO SITE e tiver a MESMA INFORMAÇÃO NA COLUNA NOC
       const chaveGrupo = nomeSite
         ? `${regInfo.corredor}::${regInfo.nome}::${nomeSite}::${nocNormalizado}`
         : `${regInfo.corredor}::${regInfo.nome}::${normalizarTexto(nomeAlarme)}::${nocNormalizado}`;
@@ -418,14 +423,27 @@ app.post('/gerar-relatorios', async (req, res) => {
       if (!grupo.alarmesDoSite.has(chaveAlarme)) {
         grupo.alarmesDoSite.set(chaveAlarme, {
           nomeOriginal: nomeAlarme,
-          registros: []
+          totalOcorrencias: 0,
+          // Guarda SOMENTE O ÚLTIMO REGISTRO DE CADA DIA (chave = YYYY-MM-DD)
+          ultimoPorDia: new Map()
         });
       }
 
-      grupo.alarmesDoSite.get(chaveAlarme).registros.push({
-        abertura: tsAbertura,
-        atualizacao: tsAtualizacao
-      });
+      const alInfo = grupo.alarmesDoSite.get(chaveAlarme);
+      alInfo.totalOcorrencias += 1;
+
+      const tsRef = tsAtualizacao || tsAbertura || 0;
+      const chaveDia = obterChaveDia(tsRef);
+      if (chaveDia) {
+        const atualDoDia = alInfo.ultimoPorDia.get(chaveDia);
+        if (!atualDoDia || tsRef >= atualDoDia.tsRef) {
+          alInfo.ultimoPorDia.set(chaveDia, {
+            abertura: tsAbertura,
+            atualizacao: tsAtualizacao,
+            tsRef
+          });
+        }
+      }
     }
 
     // 1. Processa as anotações retornadas
@@ -514,30 +532,26 @@ app.post('/gerar-relatorios', async (req, res) => {
       });
     });
 
-    // Monta as linhas consolidadas
+    // Monta as linhas consolidadas exibindo APENAS O ÚLTIMO REGISTRO DE CADA DIA
     const todosItens = Array.from(gruposPorSiteENoc.values()).map(g => {
       const blocosAlarmesHtml = [];
 
       g.alarmesDoSite.forEach(alInfo => {
-        alInfo.registros.sort((a, b) => a.abertura - b.abertura);
-        const datasUnicas = [];
-        const vistos = new Set();
+        // Ordena os dias do mais recente para o mais antigo (ou vice-versa)
+        const registrosPorDia = Array.from(alInfo.ultimoPorDia.values())
+          .sort((a, b) => b.tsRef - a.tsRef);
 
-        alInfo.registros.forEach(r => {
+        const textosDias = registrosPorDia.map(r => {
           const dtAb = formatarDataHora(r.abertura);
           const dtAt = formatarDataHora(r.atualizacao);
-          const textoRegistro = dtAt && dtAt !== dtAb ? `${dtAb} (att ${dtAt})` : dtAb;
-          if (textoRegistro && !vistos.has(textoRegistro)) {
-            vistos.add(textoRegistro);
-            datasUnicas.push(textoRegistro);
-          }
+          return dtAt && dtAt !== dtAb ? `${dtAb} (últ. att ${dtAt})` : dtAb;
         });
 
         blocosAlarmesHtml.push(`
           <div class="alarme-bloco">
             <div><b>• ${alInfo.nomeOriginal}</b></div>
             <div class="historico-datas">
-              Registros (${alInfo.registros.length}x): ${datasUnicas.join(' &bull; ')}
+              Último registro do dia (${alInfo.totalOcorrencias}x no total): ${textosDias.join(' &bull; ')}
             </div>
           </div>
         `);
