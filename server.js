@@ -55,14 +55,14 @@ function extrairRegiaoECorredor(anotacao, descricaoLimpa = '') {
   const tags = (Array.isArray(anotacao.tags) ? anotacao.tags : []).map(t => normalizarTexto(t));
   const texto = normalizarTexto(`${anotacao.text || ''} ${descricaoLimpa}`);
 
-  // 1. Primeiro verifica as tags exatas (prioridade maior)
+  // 1. Prioridade para tags exatas
   for (const tag of tags) {
     if (REGIOES_MAPA[tag]) {
       return REGIOES_MAPA[tag];
     }
   }
 
-  // 2. Depois procura palavras-chave/sites dentro do texto do alarme
+  // 2. Busca palavras-chave/sites dentro do texto do alarme
   for (const [chave, info] of Object.entries(REGIOES_MAPA)) {
     const chaveNorm = normalizarTexto(chave);
     const regex = new RegExp(`\\b${chaveNorm}\\b`, 'i');
@@ -74,7 +74,6 @@ function extrairRegiaoECorredor(anotacao, descricaoLimpa = '') {
   return { nome: 'GERAL', corredor: 'Corredor Norte' };
 }
 
-// Extrai o nome provável do site de dentro da descrição do alarme
 function extrairNomeSite(descricao) {
   if (!descricao) return '';
   let limpo = String(descricao)
@@ -327,17 +326,25 @@ app.post('/gerar-relatorios', async (req, res) => {
 
     const alertasAtivos = Array.isArray(payload.alertas_ativos) ? payload.alertas_ativos : [];
 
+    // Mapeia UID -> Nome Real do Alarme Ativo no Grafana
     const uidsAtivos = new Set();
+    const mapaNomesReaisPorUid = new Map();
+
     alertasAtivos.forEach(al => {
       if (al && al.labels && al.labels.__alert_rule_uid__) {
-        uidsAtivos.add(al.labels.__alert_rule_uid__);
+        const uid = al.labels.__alert_rule_uid__;
+        uidsAtivos.add(uid);
+
+        const nomeReal = al.labels.alertname || (al.annotations && (al.annotations.summary || al.annotations.title)) || '';
+        if (nomeReal) {
+          mapaNomesReaisPorUid.set(uid, String(nomeReal).trim());
+        }
       }
     });
 
     const turno = obterIntervaloTurno();
     const dataEmissao = new Date().toLocaleString('pt-BR');
 
-    // Mapa para agrupar alarmes repetidos em uma única linha
     const gruposAlarmes = new Map();
 
     anotacoes.forEach(an => {
@@ -357,7 +364,7 @@ app.post('/gerar-relatorios', async (req, res) => {
         ehConcluido = true;
       }
 
-      // Ignora concluídos (já que o Relatório Geral foi removido)
+      // Ignora concluídos (Relatório Geral removido)
       if (ehConcluido) return;
 
       const ehIntermitente = textoRaw.toUpperCase().includes('[INTERMITENTE]');
@@ -375,8 +382,14 @@ app.post('/gerar-relatorios', async (req, res) => {
       }
 
       const extraido = limparEExtrairDescricao(textoRaw);
-      const regInfo = extrairRegiaoECorredor(an, extraido.descricao);
-      const nomeSite = extrairNomeSite(extraido.descricao);
+
+      // Usa o nome real do alarme vinculado ao UID (evita agrupamento indevido quando vários alarmes compartilham o mesmo chamado)
+      const nomeAlarmeFinal = (ruleUid && mapaNomesReaisPorUid.has(ruleUid))
+        ? mapaNomesReaisPorUid.get(ruleUid)
+        : extraido.descricao;
+
+      const regInfo = extrairRegiaoECorredor(an, nomeAlarmeFinal);
+      const nomeSite = extrairNomeSite(nomeAlarmeFinal);
       const regiaoSite = nomeSite && !nomeSite.includes(regInfo.nome)
         ? `${regInfo.nome} • ${nomeSite}`
         : regInfo.nome;
@@ -384,8 +397,7 @@ app.post('/gerar-relatorios', async (req, res) => {
       const tsAbertura = Number(an.time || an.created || 0);
       const tsAtualizacao = Number(an.updated || tsAbertura || 0);
 
-      // Chave de agrupamento pelo nome limpo do alarme + região
-      const chaveGrupo = `${regInfo.corredor}::${normalizarTexto(extraido.descricao)}`;
+      const chaveGrupo = `${regInfo.corredor}::${normalizarTexto(nomeAlarmeFinal)}`;
 
       if (!gruposAlarmes.has(chaveGrupo)) {
         gruposAlarmes.set(chaveGrupo, {
@@ -395,7 +407,7 @@ app.post('/gerar-relatorios', async (req, res) => {
           regiaoSite,
           corredor: regInfo.corredor,
           tratando: extraido.tratando,
-          descricao: extraido.descricao,
+          descricao: nomeAlarmeFinal,
           nocSet: new Set(extraido.noc ? [extraido.noc] : []),
           vsc: '',
           statusTxt,
@@ -406,7 +418,6 @@ app.post('/gerar-relatorios', async (req, res) => {
 
       const grupo = gruposAlarmes.get(chaveGrupo);
 
-      // Atualiza datas limites (primeira abertura e última atualização)
       if (tsAbertura && (!grupo.minAbertura || tsAbertura < grupo.minAbertura)) {
         grupo.minAbertura = tsAbertura;
       }
@@ -414,10 +425,8 @@ app.post('/gerar-relatorios', async (req, res) => {
         grupo.maxAtualizacao = tsAtualizacao;
       }
 
-      // Acumula chamados NOC distintos caso existam
       if (extraido.noc) grupo.nocSet.add(extraido.noc);
 
-      // Prioriza status "Em Andamento" ou "Programado" sobre "Intermitente" se houver mistura
       if (statusTxt === 'Em Andamento') {
         grupo.statusTxt = 'Em Andamento';
         grupo.badgeClass = 'badge-andamento';
@@ -426,16 +435,13 @@ app.post('/gerar-relatorios', async (req, res) => {
         grupo.tratando = extraido.tratando;
       }
 
-      // Guarda os horários de ocorrência para exibir na descrição
       grupo.registros.push({
         abertura: tsAbertura,
         atualizacao: tsAtualizacao
       });
     });
 
-    // Converte os grupos consolidados para o formato da tabela
     const todosItens = Array.from(gruposAlarmes.values()).map(g => {
-      // Ordena registros cronologicamente e remove duplicados exatos
       g.registros.sort((a, b) => a.abertura - b.abertura);
       const datasUnicas = [];
       const vistos = new Set();
@@ -474,7 +480,7 @@ app.post('/gerar-relatorios', async (req, res) => {
       };
     });
 
-    // Mantém apenas Norte e Sul/Sudeste (Relatório Geral removido)
+    // Mantém apenas Norte e Sul/Sudeste
     const itensNorte = todosItens.filter(i => i.corredor === 'Corredor Norte');
     const itensSul = todosItens.filter(i => i.corredor === 'Corredor Sul e Sudeste');
 
