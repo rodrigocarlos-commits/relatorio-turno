@@ -4,39 +4,86 @@ const app = express();
 
 app.use(express.json({ limit: '50mb' }));
 
-// --- DICIONÁRIO DE REGIÕES E CORREDORES ---
+// --- DICIONÁRIO DE REGIÕES, SITES E CORREDORES ---
 const REGIOES_MAPA = {
+  // Corredor Norte
   'CARAJAS': { nome: 'CARAJÁS', corredor: 'Corredor Norte' },
+  'CARAJÁS': { nome: 'CARAJÁS', corredor: 'Corredor Norte' },
+  'PALMARES': { nome: 'CARAJÁS', corredor: 'Corredor Norte' },
+  'BOCAINA': { nome: 'CARAJÁS', corredor: 'Corredor Norte' },
   'SALOBO': { nome: 'SALOBO', corredor: 'Corredor Norte' },
+  'CORTE 7': { nome: 'SALOBO', corredor: 'Corredor Norte' },
   'S11D': { nome: 'S11D', corredor: 'Corredor Norte' },
   'SLZ': { nome: 'SÃO LUÍS', corredor: 'Corredor Norte' },
   'SAO LUIZ': { nome: 'SÃO LUÍS', corredor: 'Corredor Norte' },
   'SÃO LUIZ': { nome: 'SÃO LUÍS', corredor: 'Corredor Norte' },
   'SOSSEGO': { nome: 'SOSSEGO', corredor: 'Corredor Norte' },
+  'MARIA LUCIA': { nome: 'SOSSEGO', corredor: 'Corredor Norte' },
+  'BACABA': { nome: 'SOSSEGO', corredor: 'Corredor Norte' },
   'MOP': { nome: 'ONÇA PUMA', corredor: 'Corredor Norte' },
   'ONCA PUMA': { nome: 'ONÇA PUMA', corredor: 'Corredor Norte' },
   'ONÇA PUMA': { nome: 'ONÇA PUMA', corredor: 'Corredor Norte' },
+
+  // Corredor Sul e Sudeste
   'MG': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
+  'BRUCUTU': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
+  'BRUCU': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
+  'PICO DO MONGE': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
+  'VIGA': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
+  'ABOBORAS': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
+  'SERRA GERAL': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
+  'JOAO PEREIRA': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
+  'SAO GONCALO': { nome: 'MG', corredor: 'Corredor Sul e Sudeste' },
   'VIX': { nome: 'ES', corredor: 'Corredor Sul e Sudeste' },
   'ES': { nome: 'ES', corredor: 'Corredor Sul e Sudeste' },
   'RJ': { nome: 'VALE RJ', corredor: 'Corredor Sul e Sudeste' },
-  'VALE RJ': { nome: 'VALE RJ', corredor: 'Corredor Sul e Sudeste' }
+  'VALE RJ': { nome: 'VALE RJ', corredor: 'Corredor Sul e Sudeste' },
+  'TERNIUM': { nome: 'VALE RJ', corredor: 'Corredor Sul e Sudeste' },
+  'TIG': { nome: 'VALE RJ', corredor: 'Corredor Sul e Sudeste' }
 };
 
-function extrairRegiaoECorredor(anotacao) {
-  if (!anotacao) return { nome: 'GERAL', corredor: 'Corredor Norte' };
-  
-  const tags = (Array.isArray(anotacao.tags) ? anotacao.tags : []).map(t => String(t).toUpperCase());
-  const texto = String(anotacao.text || '').toUpperCase();
-  const buscaTotal = `${tags.join(' ')} ${texto}`;
+function normalizarTexto(str) {
+  return String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+}
 
+function extrairRegiaoECorredor(anotacao, descricaoLimpa = '') {
+  if (!anotacao) return { nome: 'GERAL', corredor: 'Corredor Norte' };
+
+  const tags = (Array.isArray(anotacao.tags) ? anotacao.tags : []).map(t => normalizarTexto(t));
+  const texto = normalizarTexto(`${anotacao.text || ''} ${descricaoLimpa}`);
+
+  // 1. Primeiro verifica as tags exatas (prioridade maior)
+  for (const tag of tags) {
+    if (REGIOES_MAPA[tag]) {
+      return REGIOES_MAPA[tag];
+    }
+  }
+
+  // 2. Depois procura palavras-chave/sites dentro do texto do alarme
   for (const [chave, info] of Object.entries(REGIOES_MAPA)) {
-    const regex = new RegExp(`\\b${chave}\\b`, 'i');
-    if (regex.test(buscaTotal)) {
+    const chaveNorm = normalizarTexto(chave);
+    const regex = new RegExp(`\\b${chaveNorm}\\b`, 'i');
+    if (regex.test(texto)) {
       return info;
     }
   }
+
   return { nome: 'GERAL', corredor: 'Corredor Norte' };
+}
+
+// Extrai o nome provável do site de dentro da descrição do alarme
+function extrairNomeSite(descricao) {
+  if (!descricao) return '';
+  let limpo = String(descricao)
+    .replace(/\b(ALARME|ALERTA|ENLACE|RSSI|SATELITES|NODE|BSC\s*\d*|PRINCIPAL|REDUNDANTE|POTENCIA|REFLETIDA|TENSAO|BATERIA|DC|CHUMBO|CONECTIVIDADE|INTERNET|WAN|DIFL|LATENCIA|CAPACIDADE|TANQ|GMG|BANCO|BATERIAS|PDE|M\.\s*AUT|MINA\s*AUT|L[0-4]|C[0-4]|TR\d+)\b/gi, ' ')
+    .replace(/[-–—]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return limpo.length >= 3 ? limpo : '';
 }
 
 function formatarDataHora(ts) {
@@ -139,9 +186,9 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
           <td style="white-space: nowrap;">${item.dataAbertura || ''}</td>
           <td style="white-space: nowrap;">${item.dataAtualizacao || ''}</td>
           <td style="white-space: nowrap;">${item.dataFechamento || ''}</td>
-          <td><b>${item.regiao || ''}</b></td>
+          <td><b>${item.regiaoSite || ''}</b></td>
           <td>${item.tratando || ''}</td>
-          <td>${item.descricao || ''}</td>
+          <td>${item.descricaoHtml || item.descricao || ''}</td>
           <td>${item.noc || ''}</td>
           <td>${item.vsc || ''}</td>
           <td style="text-align: center;">
@@ -176,6 +223,7 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
         tr { page-break-inside: avoid; }
         th { text-align: left; padding: 6px 5px; border-bottom: 2px solid #e2e8f0; color: #64748b; font-size: 10px; font-weight: 700; text-transform: uppercase; background: #f8fafc; }
         td { padding: 6px 5px; border-bottom: 1px solid #f1f5f9; font-size: 10px; color: #334155; vertical-align: top; word-wrap: break-word; }
+        .historico-datas { margin-top: 4px; font-size: 9px; color: #64748b; line-height: 1.35; }
         .badge { padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; display: inline-block; white-space: nowrap; text-align: center; }
         .badge-concluido { background: #dcfce7; color: #15803d; }
         .badge-andamento { background: #fef3c7; color: #b45309; }
@@ -200,10 +248,9 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
         <div class="kpi-container">
           <div>
             <div class="big-number">${itens ? itens.length : 0}</div>
-            <span class="big-label">atendimentos neste relatório</span>
+            <span class="big-label">alarmes únicos neste relatório</span>
           </div>
           <div class="kpi-bars">
-            <div class="kpi-item">🟢 <b>${kpi.concluidos}</b> Concluídos</div>
             <div class="kpi-item">🟡 <b>${kpi.andamento}</b> Em Andamento</div>
             <div class="kpi-item">🔵 <b>${kpi.programados}</b> Programados</div>
             <div class="kpi-item">🟣 <b>${kpi.intermitentes}</b> Intermitentes</div>
@@ -213,15 +260,15 @@ function gerarHtml(titulo, metaTurno, dataEmissao, itens, kpi) {
         <table>
           <thead>
             <tr>
-              <th style="width: 105px;">Data / Abertura</th>
-              <th style="width: 105px;">Atualização</th>
-              <th style="width: 105px;">Fechamento</th>
-              <th style="width: 100px;">Região / Site</th>
-              <th style="width: 90px;">Tratando</th>
-              <th>Descrição do Atendimento</th>
-              <th style="width: 90px;">NOC</th>
-              <th style="width: 45px;">VSC</th>
-              <th style="width: 100px; text-align: center;">Status</th>
+              <th style="width: 95px;">1ª Abertura</th>
+              <th style="width: 95px;">Últ. Atualização</th>
+              <th style="width: 95px;">Fechamento</th>
+              <th style="width: 120px;">Região / Site</th>
+              <th style="width: 85px;">Tratando</th>
+              <th>Descrição do Atendimento / Histórico</th>
+              <th style="width: 85px;">NOC</th>
+              <th style="width: 40px;">VSC</th>
+              <th style="width: 95px; text-align: center;">Status</th>
             </tr>
           </thead>
           <tbody>
@@ -269,7 +316,6 @@ app.post('/gerar-relatorios', async (req, res) => {
   try {
     const payload = req.body || {};
 
-    // PROTEÇÃO CONTRA ELEMENTOS AUSENTES NO JSON
     let anotacoes = [];
     if (Array.isArray(payload.anotacoes)) {
       anotacoes = payload.anotacoes;
@@ -279,7 +325,6 @@ app.post('/gerar-relatorios', async (req, res) => {
       anotacoes = payload;
     }
 
-    // Se alertas_ativos não for enviado, usa um array vazio [] sem quebrar o código
     const alertasAtivos = Array.isArray(payload.alertas_ativos) ? payload.alertas_ativos : [];
 
     const uidsAtivos = new Set();
@@ -292,31 +337,28 @@ app.post('/gerar-relatorios', async (req, res) => {
     const turno = obterIntervaloTurno();
     const dataEmissao = new Date().toLocaleString('pt-BR');
 
-    const todosItens = [];
+    // Mapa para agrupar alarmes repetidos em uma única linha
+    const gruposAlarmes = new Map();
 
     anotacoes.forEach(an => {
       if (!an) return;
-      
+
       const textoRaw = String(an.text || '');
       const tags = Array.isArray(an.tags) ? an.tags : [];
       const tagAlerta = tags.find(t => String(t).startsWith('alerta:'));
       const ruleUid = tagAlerta ? String(tagAlerta).replace('alerta:', '') : null;
 
-      // Detecta conclusão tanto no texto quanto nas tags, com ou sem acento.
-      // Isso evita que registros concluídos com variações de escrita fiquem fora do GERAL.
-      const textoStatus = `${textoRaw} ${tags.map(t => String(t)).join(' ')}`
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toUpperCase();
+      const textoStatus = normalizarTexto(`${textoRaw} ${tags.join(' ')}`);
 
       let ehConcluido = /\[\s*CONCLUID[OA]S?\s*\]/.test(textoStatus)
         || /\bSTATUS\s*[:=]\s*CONCLUID[OA]S?\b/.test(textoStatus);
 
-      // Mantém a regra existente: se a regra vinculada deixou de estar ativa,
-      // a anotação é considerada concluída quando há lista de alertas ativos disponível.
       if (uidsAtivos.size > 0 && ruleUid && !uidsAtivos.has(ruleUid)) {
         ehConcluido = true;
       }
+
+      // Ignora concluídos (já que o Relatório Geral foi removido)
+      if (ehConcluido) return;
 
       const ehIntermitente = textoRaw.toUpperCase().includes('[INTERMITENTE]');
       const ehProgramado = textoRaw.toUpperCase().includes('ITOC-PROGRAMADO') || textoRaw.toUpperCase().includes('[PROGRAMADO]');
@@ -324,10 +366,7 @@ app.post('/gerar-relatorios', async (req, res) => {
       let statusTxt = 'Em Andamento';
       let badgeClass = 'badge-andamento';
 
-      if (ehConcluido) {
-        statusTxt = 'Concluído';
-        badgeClass = 'badge-concluido';
-      } else if (ehIntermitente) {
+      if (ehIntermitente) {
         statusTxt = 'Intermitente';
         badgeClass = 'badge-intermitente';
       } else if (ehProgramado) {
@@ -335,42 +374,120 @@ app.post('/gerar-relatorios', async (req, res) => {
         badgeClass = 'badge-programado';
       }
 
-      const regInfo = extrairRegiaoECorredor(an);
       const extraido = limparEExtrairDescricao(textoRaw);
+      const regInfo = extrairRegiaoECorredor(an, extraido.descricao);
+      const nomeSite = extrairNomeSite(extraido.descricao);
+      const regiaoSite = nomeSite && !nomeSite.includes(regInfo.nome)
+        ? `${regInfo.nome} • ${nomeSite}`
+        : regInfo.nome;
 
-      todosItens.push({
-        dataAbertura: formatarDataHora(an.time || an.created),
-        dataAtualizacao: formatarDataHora(an.updated),
-        dataFechamento: ehConcluido ? formatarDataHora(an.timeEnd || an.updated) : '',
-        regiao: regInfo.nome,
-        corredor: regInfo.corredor,
-        tratando: extraido.tratando,
-        descricao: extraido.descricao,
-        noc: extraido.noc,
-        vsc: '',
-        statusTxt,
-        badgeClass,
-        ehConcluido
+      const tsAbertura = Number(an.time || an.created || 0);
+      const tsAtualizacao = Number(an.updated || tsAbertura || 0);
+
+      // Chave de agrupamento pelo nome limpo do alarme + região
+      const chaveGrupo = `${regInfo.corredor}::${normalizarTexto(extraido.descricao)}`;
+
+      if (!gruposAlarmes.has(chaveGrupo)) {
+        gruposAlarmes.set(chaveGrupo, {
+          minAbertura: tsAbertura,
+          maxAtualizacao: tsAtualizacao,
+          regiao: regInfo.nome,
+          regiaoSite,
+          corredor: regInfo.corredor,
+          tratando: extraido.tratando,
+          descricao: extraido.descricao,
+          nocSet: new Set(extraido.noc ? [extraido.noc] : []),
+          vsc: '',
+          statusTxt,
+          badgeClass,
+          registros: []
+        });
+      }
+
+      const grupo = gruposAlarmes.get(chaveGrupo);
+
+      // Atualiza datas limites (primeira abertura e última atualização)
+      if (tsAbertura && (!grupo.minAbertura || tsAbertura < grupo.minAbertura)) {
+        grupo.minAbertura = tsAbertura;
+      }
+      if (tsAtualizacao && tsAtualizacao > grupo.maxAtualizacao) {
+        grupo.maxAtualizacao = tsAtualizacao;
+      }
+
+      // Acumula chamados NOC distintos caso existam
+      if (extraido.noc) grupo.nocSet.add(extraido.noc);
+
+      // Prioriza status "Em Andamento" ou "Programado" sobre "Intermitente" se houver mistura
+      if (statusTxt === 'Em Andamento') {
+        grupo.statusTxt = 'Em Andamento';
+        grupo.badgeClass = 'badge-andamento';
+      }
+      if (extraido.tratando && extraido.tratando !== 'ITOC') {
+        grupo.tratando = extraido.tratando;
+      }
+
+      // Guarda os horários de ocorrência para exibir na descrição
+      grupo.registros.push({
+        abertura: tsAbertura,
+        atualizacao: tsAtualizacao
       });
     });
 
-    // Concluídos aparecem exclusivamente no relatório GERAL.
-    // Os relatórios Norte e Sul/Sudeste recebem somente atendimentos não concluídos.
-    const itensNorte = todosItens.filter(i => i.corredor === 'Corredor Norte' && !i.ehConcluido);
-    const itensSul = todosItens.filter(i => i.corredor === 'Corredor Sul e Sudeste' && !i.ehConcluido);
-    const itensGeral = todosItens.filter(i => i.ehConcluido);
+    // Converte os grupos consolidados para o formato da tabela
+    const todosItens = Array.from(gruposAlarmes.values()).map(g => {
+      // Ordena registros cronologicamente e remove duplicados exatos
+      g.registros.sort((a, b) => a.abertura - b.abertura);
+      const datasUnicas = [];
+      const vistos = new Set();
+
+      g.registros.forEach(r => {
+        const dtAb = formatarDataHora(r.abertura);
+        const dtAt = formatarDataHora(r.atualizacao);
+        const textoRegistro = dtAt && dtAt !== dtAb ? `${dtAb} (att ${dtAt})` : dtAb;
+        if (textoRegistro && !vistos.has(textoRegistro)) {
+          vistos.add(textoRegistro);
+          datasUnicas.push(textoRegistro);
+        }
+      });
+
+      const descricaoHtml = `
+        <div><b>${g.descricao}</b></div>
+        <div class="historico-datas">
+          <b>Registros (${g.registros.length}x):</b> ${datasUnicas.join(' &bull; ')}
+        </div>
+      `;
+
+      return {
+        dataAbertura: formatarDataHora(g.minAbertura),
+        dataAtualizacao: formatarDataHora(g.maxAtualizacao),
+        dataFechamento: '',
+        regiao: g.regiao,
+        regiaoSite: g.regiaoSite,
+        corredor: g.corredor,
+        tratando: g.tratando,
+        descricao: g.descricao,
+        descricaoHtml,
+        noc: Array.from(g.nocSet).join(' / '),
+        vsc: g.vsc,
+        statusTxt: g.statusTxt,
+        badgeClass: g.badgeClass
+      };
+    });
+
+    // Mantém apenas Norte e Sul/Sudeste (Relatório Geral removido)
+    const itensNorte = todosItens.filter(i => i.corredor === 'Corredor Norte');
+    const itensSul = todosItens.filter(i => i.corredor === 'Corredor Sul e Sudeste');
 
     const categorias = [
       { chave: 'NORTE', titulo: 'RELATÓRIO DE ATENDIMENTOS • CORREDOR NORTE', itens: itensNorte },
-      { chave: 'SUL_SUDESTE', titulo: 'RELATÓRIO DE ATENDIMENTOS • CORREDOR SUL E SUDESTE', itens: itensSul },
-      { chave: 'GERAL_CONCLUIDOS', titulo: 'RELATÓRIO GERAL • ATENDIMENTOS CONCLUÍDOS DO TURNO', itens: itensGeral }
+      { chave: 'SUL_SUDESTE', titulo: 'RELATÓRIO DE ATENDIMENTOS • CORREDOR SUL E SUDESTE', itens: itensSul }
     ];
 
     const relatoriosOutput = [];
 
     for (const cat of categorias) {
       const kpi = {
-        concluidos: cat.itens.filter(i => i.statusTxt === 'Concluído').length,
+        concluidos: 0,
         andamento: cat.itens.filter(i => i.statusTxt === 'Em Andamento').length,
         programados: cat.itens.filter(i => i.statusTxt === 'Programado').length,
         intermitentes: cat.itens.filter(i => i.statusTxt === 'Intermitente').length
